@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mercury — Soul-Driven AI Agent</title>
+  <meta name="description" content="Mercury is a soul-driven, token-efficient AI agent that runs 24/7. CLI + Telegram, 21 built-in tools, skill system, scheduling, and hardened permissions.">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta property="og:title" content="Mercury — Soul-Driven AI Agent">
+  <meta property="og:description" content="Your personal AI agent. Soul-driven, token-efficient, always on.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://mercury.cosmicstack.org">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☿</text></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav id="nav">
+    <div class="nav-inner">
+      <a href="#" class="nav-logo">☿ Mercury</a>
+      <div class="nav-links" id="navLinks">
+        <a href="#features">Features</a>
+        <a href="#how-it-works">Install</a>
+        <a href="#demo">Demo</a>
+        <a href="#capabilities">Capabilities</a>
+        <a href="#compare">Compare</a>
+        <a href="https://github.com/anomalyco/mercury" class="nav-cta" target="_blank" rel="noopener">GitHub</a>
+      </div>
+      <button class="nav-toggle" id="navToggle" aria-label="Menu">☰</button>
+    </div>
+  </nav>
+
+  <section id="hero">
+    <div class="hero-bg"></div>
+    <div class="container hero-content">
+      <pre class="hero-ascii" aria-hidden="true">
+   __  _____________  ________  ________  __
+  /  |/  / ____/ __ \/ ____/ / / / __ \ \/ /
+ / /|_/ / __/ / /_/ / /   / / / / /_/ /\  /
+/ /  / / /___/ _, _/ /___/ /_/ / _, _/ / /
+/_/  /_/_____/_/ |_|\____/\____/_/ |_| /_/
+      </pre>
+      <p class="hero-tagline">Soul-driven. Token-efficient. Always on.</p>
+      <p class="hero-sub">Your personal AI agent with 21 built-in tools, skill system, multi-channel access, and hardened permissions. Runs 24/7 from your terminal or Telegram.</p>
+      <div class="hero-actions">
+        <a href="#how-it-works" class="btn btn-primary">Get Started</a>
+        <a href="#demo" class="btn btn-secondary">See it in action</a>
+      </div>
+      <div class="terminal-window hero-terminal">
+        <div class="terminal-bar">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">terminal</span>
+        </div>
+        <div class="terminal-body" id="heroTerminal"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features" class="section">
+    <div class="container">
+      <h2 class="section-title">Built Different</h2>
+      <p class="section-sub">Not another chatbot. An orchestrator that works for you.</p>
+      <div class="features-grid">
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">☿</div>
+          <h3>Soul-Driven Identity</h3>
+          <p>Mercury isn't a blank slate. Its personality is defined by markdown soul files — soul.md, persona.md, taste.md, heartbeat.md — that you control. No corporate wrapper. Your agent, your rules.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">⚡</div>
+          <h3>Token-Efficient</h3>
+          <p>Daily token budgets with enforcement. Only soul + persona injected per request (~400 tokens). Skill summaries loaded progressively. Auto-concise mode when budget exceeds 70%.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">♾</div>
+          <h3>Always On</h3>
+          <p>Cron scheduling, delayed tasks, and a heartbeat system that monitors budget and upcoming tasks. Mercury runs 24/7 and notifies you proactively via Telegram or CLI.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">📡</div>
+          <h3>Multi-Channel</h3>
+          <p>CLI with readline and text streaming. Telegram with typing indicators, HTML formatting, and file uploads. More channels coming: Signal, Discord, Slack, WhatsApp.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">🧩</div>
+          <h3>Skill System</h3>
+          <p>Install community skills with a single command. Skills auto-load into context, get elevated permissions, and can be scheduled as recurring tasks. Based on the Agent Skills specification.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">🛡</div>
+          <h3>Permission Hardened</h3>
+          <p>Folder-level read/write scoping. Command blocklist (sudo, rm -rf, etc. — never executed). Pending approval flow. Skill elevation with granular allowed-tools. No surprises.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how-it-works" class="section section-dark">
+    <div class="container">
+      <h2 class="section-title">Up and Running in 60 Seconds</h2>
+      <div class="steps">
+        <div class="step" data-reveal>
+          <div class="step-number">1</div>
+          <h3>Install</h3>
+          <div class="terminal-inline">
+            <code>npm i -g mercury</code>
+          </div>
+          <p>Or use <code>npx mercury</code> — no install needed.</p>
+        </div>
+        <div class="step" data-reveal>
+          <div class="step-number">2</div>
+          <h3>Setup</h3>
+          <div class="terminal-inline">
+            <code>mercury</code>
+          </div>
+          <p>First run triggers the onboarding wizard. Enter your name, an API key, and optionally a Telegram bot token. Takes 30 seconds.</p>
+        </div>
+        <div class="step" data-reveal>
+          <div class="step-number">3</div>
+          <h3>Run</h3>
+          <div class="terminal-inline">
+            <code>mercury start</code>
+          </div>
+          <p>Mercury wakes up, loads your soul files, restores scheduled tasks, and is live. Start talking.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="demo" class="section">
+    <div class="container">
+      <h2 class="section-title">See It Work</h2>
+      <p class="section-sub">A real Mercury session — tool calls, streaming, files, and scheduling.</p>
+      <div class="terminal-window demo-terminal">
+        <div class="terminal-bar">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">mercury</span>
+        </div>
+        <div class="terminal-body" id="demoTerminal"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="capabilities" class="section section-dark">
+    <div class="container">
+      <h2 class="section-title">21 Built-In Tools</h2>
+      <p class="section-sub">Plus extensible skills, scheduling, and memory.</p>
+      <div class="caps-grid">
+        <div class="cap-group" data-reveal>
+          <h3>📂 Filesystem</h3>
+          <ul>
+            <li><code>read_file</code> — Read file contents</li>
+            <li><code>write_file</code> — Write to existing file</li>
+            <li><code>create_file</code> — Create new files (+ dirs)</li>
+            <li><code>edit_file</code> — Search &amp; replace text</li>
+            <li><code>list_dir</code> — List directory contents</li>
+            <li><code>delete_file</code> — Delete a file</li>
+            <li><code>send_file</code> — Send file to user (Telegram upload)</li>
+          </ul>
+        </div>
+        <div class="cap-group" data-reveal>
+          <h3>🐚 Shell</h3>
+          <ul>
+            <li><code>run_command</code> — Execute shell commands</li>
+            <li><code>approve_command</code> — Permanently approve a command</li>
+          </ul>
+        </div>
+        <div class="cap-group" data-reveal>
+          <h3>📦 Git</h3>
+          <ul>
+            <li><code>git_status</code> — Working tree status</li>
+            <li><code>git_diff</code> — Show file changes</li>
+            <li><code>git_log</code> — Commit history</li>
+            <li><code>git_add</code> — Stage files</li>
+            <li><code>git_commit</code> — Create commits</li>
+            <li><code>git_push</code> — Push to remote</li>
+          </ul>
+        </div>
+        <div class="cap-group" data-reveal>
+          <h3>🌐 Web</h3>
+          <ul>
+            <li><code>fetch_url</code> — Fetch &amp; strip HTML to text</li>
+          </ul>
+        </div>
+        <div class="cap-group" data-reveal>
+          <h3>🧩 Skills</h3>
+          <ul>
+            <li><code>install_skill</code> — Install from URL or content</li>
+            <li><code>list_skills</code> — Show installed skills</li>
+            <li><code>use_skill</code> — Invoke a skill</li>
+          </ul>
+        </div>
+        <div class="cap-group" data-reveal>
+          <h3>⏰ Scheduler</h3>
+          <ul>
+            <li><code>schedule_task</code> — Cron or one-shot tasks</li>
+            <li><code>list_scheduled_tasks</code> — View all tasks</li>
+            <li><code>cancel_scheduled_task</code> — Cancel a task</li>
+          </ul>
+        </div>
+        <div class="cap-group" data-reveal>
+          <h3>📊 System</h3>
+          <ul>
+            <li><code>budget_status</code> — Check token budget</li>
+          </ul>
+        </div>
+        <div class="cap-group" data-reveal>
+          <h3>🧠 Memory</h3>
+          <ul>
+            <li>Short-term — Recent conversation per channel</li>
+            <li>Long-term — Auto-extracted facts with dedup</li>
+            <li>Episodic — Timestamped interaction log</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="compare" class="section">
+    <div class="container">
+      <h2 class="section-title">Honest Comparison</h2>
+      <p class="section-sub">We built Mercury because nothing else did all of this.</p>
+      <div class="compare-table" data-reveal>
+        <table>
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th class="highlight">Mercury</th>
+              <th>OpenClaw</th>
+              <th>Hermes</th>
+              <th>Generic Agent</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Soul / Persona System</td>
+              <td class="highlight">4 markdown files</td>
+              <td class="no">—</td>
+              <td class="no">—</td>
+              <td class="no">—</td>
+            </tr>
+            <tr>
+              <td>Token Budget Enforcement</td>
+              <td class="highlight">Daily budget + override</td>
+              <td class="partial">Cost tracking</td>
+              <td class="no">—</td>
+              <td class="no">—</td>
+            </tr>
+            <tr>
+              <td>Multi-Channel (CLI + Telegram)</td>
+              <td class="highlight">Both + more coming</td>
+              <td class="partial">CLI only</td>
+              <td class="partial">CLI only</td>
+              <td class="partial">CLI only</td>
+            </tr>
+            <tr>
+              <td>Skill System (Agent Skills spec)</td>
+              <td class="highlight">Install, invoke, schedule</td>
+              <td class="partial">Plugin system</td>
+              <td class="no">—</td>
+              <td class="partial">Varies</td>
+            </tr>
+            <tr>
+              <td>Cron + Delayed Scheduling</td>
+              <td class="highlight">Persisted, auto-restore</td>
+              <td class="no">—</td>
+              <td class="no">—</td>
+              <td class="partial">Varies</td>
+            </tr>
+            <tr>
+              <td>Permission Hardening</td>
+              <td class="highlight">Blocklist + scope + approval</td>
+              <td class="partial">Basic allow/deny</td>
+              <td class="partial">Basic</td>
+              <td class="partial">Varies</td>
+            </tr>
+            <tr>
+              <td>Proactive Notifications</td>
+              <td class="highlight">Heartbeat + task alerts</td>
+              <td class="no">—</td>
+              <td class="no">—</td>
+              <td class="no">—</td>
+            </tr>
+            <tr>
+              <td>Auto Fact Extraction</td>
+              <td class="highlight">With dedup</td>
+              <td class="no">—</td>
+              <td class="partial">Basic</td>
+              <td class="no">—</td>
+            </tr>
+            <tr>
+              <td>Provider Fallback</td>
+              <td class="highlight">Auto with last-successful</td>
+              <td class="partial">Manual switch</td>
+              <td class="no">—</td>
+              <td class="partial">Varies</td>
+            </tr>
+            <tr>
+              <td>File Upload (Telegram)</td>
+              <td class="highlight">Yes — auto type detection</td>
+              <td class="no">—</td>
+              <td class="no">—</td>
+              <td class="no">—</td>
+            </tr>
+            <tr>
+              <td>Streaming Output (CLI)</td>
+              <td class="highlight">Real-time text stream</td>
+              <td class="partial">Varies</td>
+              <td class="no">—</td>
+              <td class="partial">Varies</td>
+            </tr>
+            <tr>
+              <td>Headless / 24-7 Mode</td>
+              <td class="highlight">Built-in</td>
+              <td class="partial">Requires setup</td>
+              <td class="partial">Requires setup</td>
+              <td class="no">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="architecture" class="section section-dark">
+    <div class="container">
+      <h2 class="section-title">Under the Hood</h2>
+      <p class="section-sub">Minimal runtime, maximum capability.</p>
+      <div class="arch-grid">
+        <div class="arch-card" data-reveal>
+          <div class="arch-label">Core</div>
+          <div class="arch-value">TypeScript + Node.js 20+</div>
+          <div class="arch-desc">ESM, tsup build, zero native deps</div>
+        </div>
+        <div class="arch-card" data-reveal>
+          <div class="arch-label">AI SDK</div>
+          <div class="arch-value">Vercel AI SDK v4</div>
+          <div class="arch-desc">streamText + generateText, 10-step agentic loop</div>
+        </div>
+        <div class="arch-card" data-reveal>
+          <div class="arch-label">Providers</div>
+          <div class="arch-value">DeepSeek · OpenAI · Anthropic</div>
+          <div class="arch-desc">Fallback chain with last-successful tracking</div>
+        </div>
+        <div class="arch-card" data-reveal>
+          <div class="arch-label">Memory</div>
+          <div class="arch-value">Flat-file JSONL/JSON</div>
+          <div class="arch-desc">Short-term, long-term, episodic — no database</div>
+        </div>
+        <div class="arch-card" data-reveal>
+          <div class="arch-label">Telegram</div>
+          <div class="arch-value">grammY</div>
+          <div class="arch-desc">Long polling, typing loop, HTML formatting, file uploads</div>
+        </div>
+        <div class="arch-card" data-reveal>
+          <div class="arch-label">Runtime Data</div>
+          <div class="arch-value">~/.mercury/</div>
+          <div class="arch-desc">Config, soul, memory, permissions, skills, schedules — all in your home dir</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="cta" class="section cta-section">
+    <div class="container">
+      <h2 class="section-title">Ready to Deploy Your Agent?</h2>
+      <div class="cta-terminal">
+        <code>npm i -g mercury && mercury</code>
+      </div>
+      <p class="cta-sub">That's it. 60 seconds to your own AI agent.</p>
+      <div class="cta-links">
+        <a href="https://github.com/anomalyco/mercury" target="_blank" rel="noopener">GitHub →</a>
+        <a href="https://github.com/anomalyco/mercury/issues" target="_blank" rel="noopener">Report an Issue →</a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <span class="footer-logo">☿ Mercury</span>
+        <span class="footer-tagline">by Cosmic Stack</span>
+      </div>
+      <div class="footer-links">
+        <a href="https://mercury.cosmicstack.org">mercury.cosmicstack.org</a>
+        <a href="https://github.com/anomalyco/mercury">GitHub</a>
+        <a href="https://github.com/anomalyco/mercury/issues">Issues</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
