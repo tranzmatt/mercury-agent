@@ -62,12 +62,14 @@ export function startBackground(): void {
   }
 
   const logFile = logPath();
+  const isWin = process.platform === 'win32';
   const outFd = openSync(logFile, 'a');
 
   const child = spawn(process.execPath, [process.argv[1], 'start', '--daemon'], {
     detached: true,
     stdio: ['ignore', outFd, outFd],
     env: { ...process.env },
+    windowsHide: isWin,
   });
 
   child.unref();
@@ -99,7 +101,11 @@ export function stopDaemon(): void {
   }
 
   try {
-    process.kill(status.pid, 'SIGTERM');
+    if (process.platform === 'win32') {
+      process.kill(status.pid);
+    } else {
+      process.kill(status.pid, 'SIGTERM');
+    }
     console.log(chalk.green(`  Mercury stopped (PID: ${status.pid})`));
   } catch {
     console.log(chalk.red(`  Failed to stop PID ${status.pid}. You may need to kill it manually.`));

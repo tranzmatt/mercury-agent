@@ -25,13 +25,7 @@ export function installService(): void {
   } else if (platform === 'linux') {
     installLinux();
   } else if (platform === 'win32') {
-    console.log(chalk.yellow('  Windows service install is not yet automated.'));
-    console.log(chalk.dim('  Use \`mercury start -d\` for background mode, or install PM2:'));
-    console.log(chalk.dim('    npm i -g pm2'));
-    console.log(chalk.dim('    pm2 start mercury'));
-    console.log(chalk.dim('    pm2 startup'));
-    console.log('');
-    return;
+    installWindows();
   } else {
     console.log(chalk.red(`  Unsupported platform: ${platform}`));
     process.exit(1);
@@ -46,8 +40,7 @@ export function uninstallService(): void {
   } else if (platform === 'linux') {
     uninstallLinux();
   } else if (platform === 'win32') {
-    console.log(chalk.yellow('  Windows service uninstall is not yet automated.'));
-    console.log('');
+    uninstallWindows();
   } else {
     console.log(chalk.red(`  Unsupported platform: ${platform}`));
     process.exit(1);
@@ -62,8 +55,7 @@ export function showServiceStatus(): void {
   } else if (platform === 'linux') {
     showLinuxStatus();
   } else if (platform === 'win32') {
-    console.log(chalk.yellow('  Windows service status is not yet automated.'));
-    console.log('');
+    showWindowsStatus();
   }
 }
 
@@ -294,4 +286,69 @@ function showLinuxStatus(): void {
     console.log(chalk.dim(`  ${err.message || err}`));
   }
   console.log('');
+}
+
+const WIN_TASK_NAME = 'MercuryAgent';
+
+function installWindows(): void {
+  const nodeBin = getNodeBinPath();
+  const scriptPath = getDistPath();
+  const home = getMercuryHome();
+  const logPath = join(home, 'daemon.log');
+
+  const cmd = `"${nodeBin}" "${scriptPath}" start --daemon`;
+
+  try {
+    execSync(
+      `schtasks /create /tn "${WIN_TASK_NAME}" /tr "${cmd}" /sc onlogon /rl limited /f`,
+      { stdio: 'inherit', shell: 'cmd.exe' }
+    );
+  } catch {
+    console.log(chalk.yellow('  schtasks create failed. Try running from an Administrator cmd:'));
+    console.log(chalk.dim(`    schtasks /create /tn "${WIN_TASK_NAME}" /tr "${cmd}" /sc onlogon /rl limited /f`));
+  }
+
+  try {
+    execSync(`schtasks /run /tn "${WIN_TASK_NAME}"`, { stdio: 'inherit', shell: 'cmd.exe' });
+  } catch {
+    console.log(chalk.yellow('  Task created but failed to start immediately. It will start on next login.'));
+  }
+
+  console.log('');
+  console.log(chalk.green('  Mercury service installed (Windows Task Scheduler)'));
+  console.log(chalk.dim(`  Task: ${WIN_TASK_NAME}`));
+  console.log(chalk.dim(`  Trigger: on logon`));
+  console.log(chalk.dim(`  Logs: ${logPath}`));
+  console.log(chalk.dim('  Auto-starts on login. Use --daemon flag for crash recovery.'));
+  console.log('');
+  console.log(chalk.dim('  Uninstall: mercury service uninstall'));
+  console.log('');
+}
+
+function uninstallWindows(): void {
+  try {
+    execSync(`schtasks /delete /tn "${WIN_TASK_NAME}" /f`, { stdio: 'inherit', shell: 'cmd.exe' });
+    console.log('');
+    console.log(chalk.green('  Mercury service uninstalled'));
+    console.log('');
+  } catch {
+    console.log(chalk.yellow('  Task not found or failed to delete. Remove manually:'));
+    console.log(chalk.dim(`    schtasks /delete /tn "${WIN_TASK_NAME}" /f`));
+    console.log('');
+  }
+}
+
+function showWindowsStatus(): void {
+  try {
+    const output = execSync(`schtasks /query /tn "${WIN_TASK_NAME}" /fo list`, {
+      encoding: 'utf-8',
+      shell: 'cmd.exe',
+    }).trim();
+    console.log(output);
+    console.log('');
+  } catch {
+    console.log(chalk.yellow('  Mercury service is not installed.'));
+    console.log(chalk.dim('  Run `mercury service install` to set it up.'));
+    console.log('');
+  }
 }
