@@ -63,25 +63,10 @@ export async function githubRequest(path: string, options: GitHubRequestOptions 
 
   if (response.status === 204) return null;
 
-  return response.json();
-}
-
-export function parseRepo(remoteUrl: string): { owner: string; repo: string } | null {
-  const sshMatch = remoteUrl.match(/git@github\.com:([^/]+)\/([^.\s]+)(?:\.git)?$/);
-  if (sshMatch) return { owner: sshMatch[1], repo: sshMatch[2] };
-
-  const httpsMatch = remoteUrl.match(/https:\/\/github\.com\/([^/]+)\/([^.\s]+)(?:\.git)?$/);
-  if (httpsMatch) return { owner: httpsMatch[1], repo: httpsMatch[2] };
-
-  return null;
-}
-
-export async function getCurrentRepo(): Promise<{ owner: string; repo: string } | null> {
-  try {
-    const { execSync } = await import('node:child_process');
-    const remoteUrl = execSync('git remote get-url origin', { encoding: 'utf-8', timeout: 5000 }).trim();
-    return parseRepo(remoteUrl);
-  } catch {
-    return null;
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return response.json();
   }
+
+  return response.text();
 }

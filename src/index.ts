@@ -223,6 +223,16 @@ async function configure(existingConfig?: MercuryConfig): Promise<void> {
     appendToEnv('GITHUB_TOKEN', ghToken);
   }
 
+  if (config.github.username || process.env.GITHUB_TOKEN) {
+    const ghOwnerCurrent = isReconfig && config.github.defaultOwner ? ` [${config.github.defaultOwner}]` : '';
+    const ghOwner = await ask(chalk.white(`  Default GitHub owner/org${ghOwnerCurrent}: `));
+    if (ghOwner) config.github.defaultOwner = ghOwner;
+
+    const ghRepoCurrent = isReconfig && config.github.defaultRepo ? ` [${config.github.defaultRepo}]` : '';
+    const ghRepo = await ask(chalk.white(`  Default repo name${ghRepoCurrent}: `));
+    if (ghRepo) config.github.defaultRepo = ghRepo;
+  }
+
   hr();
   console.log('');
   console.log(chalk.bold.white('  Token Budget'));

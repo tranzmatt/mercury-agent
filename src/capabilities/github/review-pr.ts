@@ -1,25 +1,20 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { githubRequest, getCurrentRepo } from '../../utils/github.js';
+import { githubRequest } from '../../utils/github.js';
 
 export function createReviewPrTool() {
   return tool({
     description: 'Get details of a pull request including the diff. Reviews the PR and returns the title, body, changed files, and diff. Optionally post a review comment.',
     parameters: z.object({
+      owner: z.string().describe('Repository owner (username or org)'),
+      repo: z.string().describe('Repository name'),
       number: z.number().describe('PR number'),
       comment: z.string().describe('Review comment to post on the PR (optional)').optional(),
     }),
-    execute: async ({ number, comment }) => {
+    execute: async ({ owner, repo, number, comment }) => {
       try {
-        const repo = await getCurrentRepo();
-        if (!repo) return 'Error: Could not detect GitHub repository.';
-
-        const pr = await githubRequest(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`);
+        const pr = await githubRequest(`/repos/${owner}/${repo}/pulls/${number}`);
         if (!pr) return `Error: PR #${number} not found.`;
-
-        const diff = await githubRequest(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, {
-          headers: { 'Accept': 'application/vnd.github.v3.diff' },
-        });
 
         let summary = `PR #${pr.number}: ${pr.title}\n`;
         summary += `Author: ${pr.user?.login}\n`;
@@ -31,26 +26,29 @@ export function createReviewPrTool() {
           summary += `Description:\n${pr.body.slice(0, 2000)}\n\n`;
         }
 
-        if (typeof diff === 'string') {
-          const diffLines = diff.split('\n');
-          const maxDiffLines = 200;
-          summary += `Diff (first ${Math.min(diffLines.length, maxDiffLines)} of ${diffLines.length} lines):\n`;
-          summary += diffLines.slice(0, maxDiffLines).join('\n');
-          if (diffLines.length > maxDiffLines) {
-            summary += `\n\n... (${diffLines.length - maxDiffLines} more lines)`;
+        try {
+          const diff = await githubRequest(`/repos/${owner}/${repo}/pulls/${number}`, {
+            headers: { 'Accept': 'application/vnd.github.v3.diff' },
+          });
+
+          if (typeof diff === 'string') {
+            const diffLines = diff.split('\n');
+            const maxDiffLines = 200;
+            summary += `Diff (first ${Math.min(diffLines.length, maxDiffLines)} of ${diffLines.length} lines):\n`;
+            summary += diffLines.slice(0, maxDiffLines).join('\n');
+            if (diffLines.length > maxDiffLines) {
+              summary += `\n\n... (${diffLines.length - maxDiffLines} more lines)`;
+            }
           }
-        } else {
-          summary += `(Diff not available in text format)`;
+        } catch {
+          summary += `(Diff not available)`;
         }
 
         if (comment) {
           try {
-            await githubRequest(`/repos/${repo.owner}/${repo.repo}/pulls/${number}/reviews`, {
+            await githubRequest(`/repos/${owner}/${repo}/pulls/${number}/reviews`, {
               method: 'POST',
-              body: {
-                body: comment,
-                event: 'COMMENT',
-              },
+              body: { body: comment, event: 'COMMENT' },
             });
             summary += `\n\nReview comment posted.`;
           } catch (err: any) {

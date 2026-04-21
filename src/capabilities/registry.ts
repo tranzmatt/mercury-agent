@@ -142,7 +142,7 @@ export class CapabilityRegistry {
       this.tools.review_pr = createReviewPrTool();
       this.tools.list_issues = createListIssuesTool();
       this.tools.create_issue = createCreateIssueTool();
-      this.tools.github_api = createGithubApiTool(this.permissions);
+      this.tools.github_api = createGithubApiTool();
       logger.info('GitHub tools registered');
     }
 

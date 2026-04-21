@@ -48,6 +48,8 @@ export interface MercuryConfig {
   github: {
     username: string;
     email: string;
+    defaultOwner: string;
+    defaultRepo: string;
   };
   memory: {
     dir: string;
@@ -124,6 +126,8 @@ export function getDefaultConfig(): MercuryConfig {
     github: {
       username: getEnv('GITHUB_USERNAME', ''),
       email: getEnv('GITHUB_EMAIL', ''),
+      defaultOwner: getEnv('GITHUB_DEFAULT_OWNER', ''),
+      defaultRepo: getEnv('GITHUB_DEFAULT_REPO', ''),
     },
     memory: {
       dir: getEnv('MEMORY_DIR', join(home, 'memory')),
