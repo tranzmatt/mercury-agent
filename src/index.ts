@@ -90,6 +90,15 @@ function appendToEnv(key: string, value: string): void {
   process.env[key] = value;
 }
 
+function parseGithubRepo(input: string): { owner: string; repo: string } | null {
+  const trimmed = input.trim().replace(/\/+$/, '');
+  const urlMatch = trimmed.match(/github\.com\/([^/]+)\/([^/]+)/);
+  if (urlMatch) return { owner: urlMatch[1], repo: urlMatch[2] };
+  const shortMatch = trimmed.match(/^([^/\s]+)\/([^/\s]+)$/);
+  if (shortMatch) return { owner: shortMatch[1], repo: shortMatch[2] };
+  return null;
+}
+
 async function configure(existingConfig?: MercuryConfig): Promise<void> {
   const isReconfig = !!existingConfig;
   const config = existingConfig ?? loadConfig();
@@ -204,33 +213,50 @@ async function configure(existingConfig?: MercuryConfig): Promise<void> {
 
   hr();
   console.log('');
-  console.log(chalk.bold.white('  GitHub (optional)'));
-  console.log(chalk.dim('  Connect Mercury to GitHub for PRs, issues, and co-authored commits.'));
+  console.log(chalk.bold.white('  GitHub Integration (optional)'));
+  console.log(chalk.dim('  Connect Mercury to GitHub so it can create PRs, manage issues,'));
+  console.log(chalk.dim('  review code, and co-author commits on your behalf.'));
   console.log(chalk.dim('  Leave empty to skip. You can add it later with mercury doctor.'));
   console.log('');
 
   const ghUserCurrent = isReconfig && config.github.username ? ` [${config.github.username}]` : '';
-  const ghUsername = await ask(chalk.white(`  GitHub username${ghUserCurrent}: `));
+  const ghUsername = await ask(chalk.white(`  1. Your GitHub username${ghUserCurrent}: `));
   if (ghUsername) config.github.username = ghUsername;
 
   const ghEmailCurrent = isReconfig && config.github.email ? ` [${config.github.email}]` : '';
-  const ghEmail = await ask(chalk.white(`  GitHub email${ghEmailCurrent}: `));
+  console.log(chalk.dim('     This appears in the Co-authored-by trailer on commits.'));
+  const ghEmail = await ask(chalk.white(`  2. GitHub email (for co-author)${ghEmailCurrent}: `));
   if (ghEmail) config.github.email = ghEmail;
 
+  console.log('');
+  console.log(chalk.dim('     You need a Personal Access Token (PAT) with repo access.'));
+  console.log(chalk.dim('     Fine-grained (recommended): github.com/settings/personal-access-tokens/new'));
+  console.log(chalk.dim('       → Permissions: Contents (R/W), Pull requests (R/W), Issues (R/W)'));
+  console.log(chalk.dim('     Classic: github.com/settings/tokens/new'));
+  console.log(chalk.dim('       → Scope: repo (full control)'));
   const ghTokenCurrent = process.env.GITHUB_TOKEN ? ` [${maskKey(process.env.GITHUB_TOKEN)}]` : '';
-  const ghToken = await ask(chalk.white(`  GitHub PAT (repo scope)${ghTokenCurrent}: `));
+  const ghToken = await ask(chalk.white(`  3. GitHub PAT${ghTokenCurrent}: `));
   if (ghToken) {
     appendToEnv('GITHUB_TOKEN', ghToken);
   }
 
   if (config.github.username || process.env.GITHUB_TOKEN) {
-    const ghOwnerCurrent = isReconfig && config.github.defaultOwner ? ` [${config.github.defaultOwner}]` : '';
-    const ghOwner = await ask(chalk.white(`  Default GitHub owner/org${ghOwnerCurrent}: `));
-    if (ghOwner) config.github.defaultOwner = ghOwner;
-
-    const ghRepoCurrent = isReconfig && config.github.defaultRepo ? ` [${config.github.defaultRepo}]` : '';
-    const ghRepo = await ask(chalk.white(`  Default repo name${ghRepoCurrent}: `));
-    if (ghRepo) config.github.defaultRepo = ghRepo;
+    console.log('');
+    console.log(chalk.dim('     Set a default repo so you can say "create an issue" without'));
+    console.log(chalk.dim('     specifying the repo every time. Enter owner/name or a full URL.'));
+    console.log(chalk.dim('     Example: hotheadhacker/mercury-agent'));
+    console.log(chalk.dim('     Example: https://github.com/hotheadhacker/mercury-agent'));
+    const ghOwnerCurrent = isReconfig && config.github.defaultOwner ? ` [${config.github.defaultOwner}/${config.github.defaultRepo}]` : '';
+    const ghRepoInput = await ask(chalk.white(`  4. Default repo${ghOwnerCurrent}: `));
+    if (ghRepoInput) {
+      const parsed = parseGithubRepo(ghRepoInput);
+      if (parsed) {
+        config.github.defaultOwner = parsed.owner;
+        config.github.defaultRepo = parsed.repo;
+      } else {
+        console.log(chalk.yellow('  Could not parse repo. Use format: owner/repo or a GitHub URL.'));
+      }
+    }
   }
 
   hr();
