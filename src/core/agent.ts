@@ -12,6 +12,7 @@ import { Lifecycle } from './lifecycle.js';
 import { Scheduler } from './scheduler.js';
 import { logger } from '../utils/logger.js';
 import { CLIChannel } from '../channels/cli.js';
+import { formatToolStep } from '../utils/tool-label.js';
 import type { ArrowSelectOption } from '../utils/arrow-select.js';
 import {
   approveTelegramPendingRequest,
@@ -378,7 +379,15 @@ export class Agent {
                     }
                     loopAbortController.abort();
                   }
-                  await channel.send(`  [Using: ${names}]`, msg.channelId).catch(() => {});
+                  if (channel && msg.channelType !== 'internal') {
+                    if (channel instanceof CLIChannel) {
+                      for (const tc of toolCalls) {
+                        await (channel as CLIChannel).sendToolFeedback(tc.toolName, tc.args as Record<string, any>).catch(() => {});
+                      }
+                    } else {
+                      await channel.send(`  [Using: ${names}]`, msg.channelId).catch(() => {});
+                    }
+                  }
                 }
               },
             });
@@ -434,7 +443,13 @@ export class Agent {
                     loopAbortController.abort();
                   }
                   if (channel && msg.channelType !== 'internal') {
-                    await channel.send(`  [Using: ${names}]`, msg.channelId).catch(() => {});
+                    if (channel instanceof CLIChannel) {
+                      for (const tc of toolCalls) {
+                        await (channel as CLIChannel).sendToolFeedback(tc.toolName, tc.args as Record<string, any>).catch(() => {});
+                      }
+                    } else {
+                      await channel.send(`  [Using: ${names}]`, msg.channelId).catch(() => {});
+                    }
                   }
                 }
               },

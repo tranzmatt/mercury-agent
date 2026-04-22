@@ -6,6 +6,7 @@ import type { ChannelMessage } from '../types/channel.js';
 import { BaseChannel } from './base.js';
 import { logger } from '../utils/logger.js';
 import { renderMarkdown } from '../utils/markdown.js';
+import { formatToolStep } from '../utils/tool-label.js';
 import {
   ArrowSelectCancelledError,
   selectWithArrowKeys,
@@ -19,6 +20,7 @@ export class CLIChannel extends BaseChannel {
   private menuDepth = 0;
   private menuAbortController: AbortController | null = null;
   private outputInProgress = 0;
+  private streamActive = false;
 
   constructor(agentName: string = 'Mercury') {
     super();
@@ -40,7 +42,7 @@ export class CLIChannel extends BaseChannel {
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
-      prompt: '  You: ',
+      prompt: '',
     });
 
     this.rl.on('line', (line) => {
@@ -73,12 +75,12 @@ export class CLIChannel extends BaseChannel {
     this.beginOutput();
     const timeStr = elapsedMs != null ? chalk.dim(` (${(elapsedMs / 1000).toFixed(1)}s)`) : '';
     const rendered = renderMarkdown(content);
-    console.log('');
-    console.log(chalk.cyan(`  ${this.agentName}:`) + timeStr);
     const indented = rendered
       .split('\n')
       .map((line: string) => `  ${line}`)
       .join('\n');
+    console.log('');
+    console.log(chalk.cyan(`  ${this.agentName}:`) + timeStr);
     console.log(indented);
     console.log('');
     this.endOutput();
@@ -107,9 +109,19 @@ export class CLIChannel extends BaseChannel {
     this.endOutput();
   }
 
+  async sendToolFeedback(toolName: string, args: Record<string, any>): Promise<void> {
+    const label = formatToolStep(toolName, args);
+    if (this.streamActive) {
+      process.stdout.write(chalk.dim(`\n  ${label}\n`));
+    } else {
+      console.log(chalk.dim(`  ${label}`));
+    }
+  }
+
   async stream(content: AsyncIterable<string>, _targetId?: string): Promise<string> {
     this.closeActiveMenu();
     this.beginOutput();
+    this.streamActive = true;
 
     if (!process.stdout.isTTY) {
       process.stdout.write(chalk.cyan(`  ${this.agentName}: `));
@@ -118,43 +130,77 @@ export class CLIChannel extends BaseChannel {
         process.stdout.write(chunk);
         full += chunk;
       }
+      this.streamActive = false;
       console.log('\n');
       this.endOutput();
       return full;
     }
 
-    console.log('');
-    process.stdout.write(chalk.cyan(`  ${this.agentName}: `));
-    const prefixLines = 2;
+    const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let frameIdx = 0;
+    let spinnerInterval: NodeJS.Timeout | null = null;
+    let hasContent = false;
+
+    process.stdout.write(chalk.cyan(`  ${this.agentName}:`));
+
+    spinnerInterval = setInterval(() => {
+      if (!hasContent) {
+        process.stdout.write(`\r${chalk.cyan(`  ${this.agentName}:`)} ${chalk.dim(spinnerFrames[frameIdx % spinnerFrames.length])} `);
+        frameIdx++;
+      }
+    }, 80);
 
     let full = '';
     for await (const chunk of content) {
+      if (!hasContent) {
+        hasContent = true;
+        if (spinnerInterval) {
+          clearInterval(spinnerInterval);
+          spinnerInterval = null;
+        }
+        process.stdout.write(`\r${chalk.cyan(`  ${this.agentName}:`)}  `);
+      }
       process.stdout.write(chunk);
       full += chunk;
     }
 
-    const termWidth = process.stdout.columns || 80;
-    let wrappedLines = 0;
-    for (const line of full.split('\n')) {
-      const visualLen = line.replace(/\x1b\[[0-9;]*m/g, '').length;
-      wrappedLines += Math.max(1, Math.ceil((visualLen + 4) / termWidth));
+    if (spinnerInterval) {
+      clearInterval(spinnerInterval);
     }
-    const totalLines = prefixLines + wrappedLines;
 
-    process.stdout.write(`\x1b[${totalLines}A`);
-    for (let i = 0; i < totalLines; i++) {
-      process.stdout.write('\x1b[2K\x1b[1B');
+    this.streamActive = false;
+
+    if (!hasContent) {
+      process.stdout.write(`\r${chalk.cyan(`  ${this.agentName}:`)}  `);
     }
-    process.stdout.write(`\x1b[${totalLines}A`);
 
-    const rendered = renderMarkdown(full);
-    const indented = rendered
-      .split('\n')
-      .map((line: string) => `  ${line}`)
-      .join('\n');
-    console.log(chalk.cyan(`  ${this.agentName}:`));
-    console.log(indented);
-    console.log('');
+    if (full.trim()) {
+      const linesWritten = full.split('\n');
+      let textLineCount = 0;
+      const termWidth = process.stdout.columns || 80;
+      for (const line of linesWritten) {
+        const visualLen = line.replace(/\x1b\[[0-9;]*m/g, '').length;
+        textLineCount += Math.max(1, Math.ceil((visualLen + 2) / termWidth));
+      }
+      const totalLines = 1 + textLineCount + 1;
+      process.stdout.write(`\x1b[${totalLines}A`);
+      for (let i = 0; i < totalLines; i++) {
+        process.stdout.write('\x1b[2K\x1b[1B');
+      }
+      process.stdout.write(`\x1b[${totalLines}A`);
+
+      const rendered = renderMarkdown(full);
+      const indented = rendered
+        .split('\n')
+        .map((line: string) => `  ${line}`)
+        .join('\n');
+      console.log(chalk.cyan(`  ${this.agentName}:`));
+      console.log(indented);
+      console.log('');
+    } else {
+      console.log('');
+    }
+
     this.endOutput();
     return full;
   }
@@ -165,7 +211,7 @@ export class CLIChannel extends BaseChannel {
 
   showPrompt(): void {
     if (this.rl) {
-      this.rl.setPrompt('  You: ');
+      this.rl.setPrompt(chalk.yellow('  You: '));
       this.rl.prompt();
     }
   }
