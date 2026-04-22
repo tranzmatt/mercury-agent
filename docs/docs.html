@@ -336,9 +336,12 @@
       <ul>
         <li><strong>Your name</strong> — used by the agent to address you</li>
         <li><strong>Agent name</strong> — defaults to "Mercury", customize it</li>
-        <li><strong>LLM API keys</strong> — at least one: DeepSeek, OpenAI, or Anthropic</li>
-        <li><strong>Telegram bot token</strong> — optional, for remote access</li>
+        <li><strong>LLM providers</strong> — choose one or more: DeepSeek, OpenAI, Anthropic, Grok, Ollama Cloud, or Ollama Local</li>
+        <li><strong>Model selection</strong> — after each valid key, Mercury fetches recommended chat models and lets you choose a default</li>
+        <li><strong>Telegram bot token</strong> — optional, for remote access in private 1:1 chats</li>
       </ul>
+      <p>Provider keys are validated by format and then by fetching available models. If model discovery fails, Mercury asks you to re-enter the key instead of accepting random text.</p>
+      <p>If you enable Telegram during first-time setup, Mercury starts a temporary pairing flow: send <code>/start</code> to your bot in Telegram, copy the pairing code you receive there, then paste that code into the CLI to finish setup.</p>
       <p>All config is stored in <code>~/.mercury/</code> — nothing in your project directory.</p>
 
       <div class="callout">
@@ -461,7 +464,8 @@
         on any field to keep it unchanged, or type a new value to replace it.</p>
       <ul>
         <li><strong>API keys</strong> are shown masked: <code>sk-x••••4f2a</code></li>
-        <li><strong>Telegram token</strong> — type <code>none</code> to disable Telegram</li>
+        <li><strong>Providers and models</strong> can be reselected; Mercury fetches models again for changed credentials</li>
+        <li><strong>Telegram token</strong> — type <code>none</code> to disable Telegram, or paste a token to start the pairing-code flow</li>
         <li><strong>Daily budget</strong> — change the token budget limit</li>
       </ul>
       <div class="terminal-inline">
@@ -469,7 +473,7 @@
       </div>
 
       <h2 id="in-chat">In-Chat Commands</h2>
-      <p>Type these during a conversation with Mercury — they work on both CLI and Telegram. They <strong>do not consume
+      <p>Type these during a conversation with Mercury. Most work in both CLI and Telegram unless marked otherwise. They <strong>do not consume
           API tokens</strong>.</p>
       <table class="cmd-table">
         <thead>
@@ -486,6 +490,46 @@
           <tr>
             <td>/status</td>
             <td>Show agent name, provider, budget, and channels</td>
+          </tr>
+          <tr>
+            <td>/ or /menu</td>
+            <td>CLI only: open the arrow-key command picker with Back and Exit options</td>
+          </tr>
+          <tr>
+            <td>/telegram</td>
+            <td>CLI only: open Telegram management with pending requests, approvals, roles, and reset actions</td>
+          </tr>
+          <tr>
+            <td>/telegram pending</td>
+            <td>CLI only: list pending Telegram access requests</td>
+          </tr>
+          <tr>
+            <td>/telegram users</td>
+            <td>CLI only: list approved Telegram admins and members</td>
+          </tr>
+          <tr>
+            <td>/telegram approve &lt;code|id&gt;</td>
+            <td>CLI only: approve the first pairing code or a later Telegram access request</td>
+          </tr>
+          <tr>
+            <td>/telegram reject &lt;id&gt;</td>
+            <td>CLI only: reject a pending Telegram access request</td>
+          </tr>
+          <tr>
+            <td>/telegram remove &lt;id&gt;</td>
+            <td>CLI only: revoke an approved Telegram user</td>
+          </tr>
+          <tr>
+            <td>/telegram promote &lt;id&gt;</td>
+            <td>CLI only: promote a Telegram member to admin</td>
+          </tr>
+          <tr>
+            <td>/telegram demote &lt;id&gt;</td>
+            <td>CLI only: demote a Telegram admin to member</td>
+          </tr>
+          <tr>
+            <td>/telegram reset</td>
+            <td>CLI only: clear all Telegram access and restart pairing from scratch</td>
           </tr>
           <tr>
             <td>/tools</td>
@@ -521,6 +565,10 @@
           </tr>
         </tbody>
       </table>
+      <div class="callout">
+        <div class="callout-title">Telegram pairing and access</div>
+        <p>Telegram stays private 1:1 only. The first user sends <code>/start</code>, receives a pairing code in Telegram, and you approve that code from the CLI during setup. Later Telegram users also send <code>/start</code>, appear as pending requests, and can then be approved or rejected from the CLI <code>/telegram</code> menu.</p>
+      </div>
 
       <h2 id="daemon">Daemon Mode</h2>
       <p>Mercury can run in the background so Telegram and scheduled tasks keep working after you close the terminal.</p>
@@ -850,7 +898,7 @@
       </div>
 
       <h2 id="tools">Built-in Tools</h2>
-      <p>Mercury has 21 built-in tools it can use during conversations. These are not CLI commands — the agent decides
+      <p>Mercury has a built-in toolset it can use during conversations. These are not CLI commands — the agent decides
         when to call them.</p>
 
       <h3>Filesystem</h3>
@@ -897,6 +945,29 @@
             <td>send_file</td>
             <td>Send file to user (Telegram upload)</td>
             <td>path</td>
+          </tr>
+          <tr>
+            <td>approve_scope</td>
+            <td>Request read/write access to a directory</td>
+            <td>path, mode</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Messaging</h3>
+      <table class="cmd-table">
+        <thead>
+          <tr>
+            <th>Tool</th>
+            <th>What it does</th>
+            <th>Parameters</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>send_message</td>
+            <td>Send a message to approved Telegram recipients</td>
+            <td>content</td>
           </tr>
         </tbody>
       </table>
@@ -1081,7 +1152,12 @@
         <li><strong>DeepSeek</strong> — default, cost-effective</li>
         <li><strong>OpenAI</strong> — GPT-4o-mini and others</li>
         <li><strong>Anthropic</strong> — Claude and others</li>
+        <li><strong>Grok</strong> — xAI chat models</li>
+        <li><strong>Ollama Cloud</strong> — hosted Ollama models with API key auth</li>
+        <li><strong>Ollama Local</strong> — your local Ollama server with base URL + model</li>
       </ul>
+      <p>During onboarding, Mercury lets you choose one or more providers first. After each valid credential, it fetches a short list of recommended chat-capable models, lets you pick one with arrow keys, and still allows manual model entry when needed.</p>
+      <p>Default selection rules are simple: if only one provider is configured, that provider becomes the default; if several are configured, Mercury asks you which one should be the default, with DeepSeek preselected when available.</p>
       <p>When a provider fails, Mercury automatically tries the next one. It remembers the last successful provider and
         starts there on the next request.</p>
 

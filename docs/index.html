@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Mercury — Soul-Driven AI Agent with Permission Guardrails | Cosmic Stack</title>
   <meta name="description"
-    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, full control, and GitHub companion. Runs 24/7 from CLI or Telegram. 26 built-in tools, skill system, scheduling.">
+    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, full control, and GitHub companion. Runs 24/7 from CLI or Telegram with multi-provider onboarding, model selection, skills, and scheduling.">
   <meta name="author" content="Cosmic Stack">
   <meta name="robots" content="index, follow">
   <meta name="keywords"
@@ -17,7 +17,7 @@
   <!-- Open Graph -->
   <meta property="og:title" content="Mercury — Soul-Driven AI Agent with Permission Guardrails">
   <meta property="og:description"
-    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, and full control. Runs 24/7 from CLI or Telegram.">
+    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, and full control. Runs 24/7 from CLI or Telegram with multi-provider onboarding and model selection.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://mercury.cosmicstack.org">
   <meta property="og:image" content="https://mercury.cosmicstack.org/card.png">
@@ -32,7 +32,7 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Mercury — Soul-Driven AI Agent with Permission Guardrails">
   <meta name="twitter:description"
-    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, and full control.">
+    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, and full control with multi-provider onboarding.">
   <meta name="twitter:image" content="https://mercury.cosmicstack.org/card.png">
   <meta name="twitter:image:alt"
     content="Mercury — Soul-Driven AI Agent. Permission Guardrails. Token Efficiency. Full Control.">
@@ -104,7 +104,7 @@
 /_/  /_/_____/_/ |_|\____/\____/_/ |_| /_/
       </pre>
       <p class="hero-tagline">Soul-driven. Token-efficient. Always on.</p>
-      <p class="hero-sub">Your personal AI agent with 26 built-in tools, skill system, multi-channel access, GitHub companion, and
+      <p class="hero-sub">Your personal AI agent with built-in tools, skill system, multi-channel access, GitHub companion, and
         hardened permissions. Runs 24/7 from your terminal or Telegram.</p>
       <div class="hero-actions">
         <a href="#how-it-works" class="btn btn-primary">Get Started</a>
@@ -147,7 +147,7 @@
         <div class="feature-card" data-reveal>
           <div class="feature-icon">📡</div>
           <h3>Multi-Channel</h3>
-          <p>CLI with readline and text streaming. Telegram with typing indicators, HTML formatting, and file uploads.
+          <p>CLI with readline and arrow-key command menus. Telegram with typing indicators, HTML formatting, file uploads, and private 1:1 access approval.
             More channels coming: Signal, Discord, Slack, WhatsApp.</p>
         </div>
         <div class="feature-card" data-reveal>
@@ -184,8 +184,7 @@
           <div class="terminal-inline">
             <code>mercury</code>
           </div>
-          <p>First run triggers the onboarding wizard. Enter your name, an API key, and optionally a Telegram bot token.
-            Takes 30 seconds.</p>
+          <p>First run triggers the onboarding wizard. Choose one or more providers, validate each key by fetching models, pick your default model, and optionally pair Telegram with a bot token plus pairing code.</p>
         </div>
         <div class="step" data-reveal>
           <div class="step-number">3</div>
@@ -217,7 +216,7 @@
 
   <section id="capabilities" class="section section-dark">
     <div class="container">
-      <h2 class="section-title">26 Built-In Tools</h2>
+      <h2 class="section-title">Built-In Tools</h2>
       <p class="section-sub">Plus extensible skills, scheduling, and memory.</p>
       <div class="caps-grid">
         <div class="cap-group" data-reveal>
@@ -231,6 +230,12 @@
             <li><code>delete_file</code> — Delete a file</li>
             <li><code>send_file</code> — Send file to user (Telegram upload)</li>
             <li><code>approve_scope</code> — Request directory access</li>
+          </ul>
+        </div>
+        <div class="cap-group" data-reveal>
+          <h3>💬 Messaging</h3>
+          <ul>
+            <li><code>send_message</code> — Send a message to approved Telegram recipients</li>
           </ul>
         </div>
         <div class="cap-group" data-reveal>
@@ -442,7 +447,7 @@
             <li><code>mercury restart</code> — Restart background process</li>
             <li><code>mercury stop</code> — Stop background process</li>
             <li><code>mercury doctor</code> — Reconfigure (Enter keeps values)</li>
-            <li><code>/help</code> <code>/status</code> <code>/budget</code> — In-chat commands</li>
+            <li><code>/</code> <code>/menu</code> <code>/telegram</code> — Arrow-key command menus in CLI chat</li>
           </ul>
         </div>
         <div class="cap-group" data-reveal>
@@ -520,8 +525,8 @@
         </div>
         <div class="arch-card" data-reveal>
           <div class="arch-label">Providers</div>
-          <div class="arch-value">DeepSeek · OpenAI · Anthropic</div>
-          <div class="arch-desc">Fallback chain with last-successful tracking</div>
+          <div class="arch-value">DeepSeek · OpenAI · Anthropic · Grok · Ollama Cloud · Ollama Local</div>
+          <div class="arch-desc">Validated onboarding, model discovery, and fallback with last-successful tracking</div>
         </div>
         <div class="arch-card" data-reveal>
           <div class="arch-label">Memory</div>
@@ -531,7 +536,7 @@
         <div class="arch-card" data-reveal>
           <div class="arch-label">Telegram</div>
           <div class="arch-value">grammY</div>
-          <div class="arch-desc">Long polling, typing loop, HTML formatting, file uploads</div>
+          <div class="arch-desc">Long polling, pairing codes, CLI-managed access requests, broadcasts, file uploads</div>
         </div>
         <div class="arch-card" data-reveal>
           <div class="arch-label">Runtime Data</div>
