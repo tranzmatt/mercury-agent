@@ -24,6 +24,24 @@ export interface ProviderConfig {
   enabled: boolean;
 }
 
+export interface TelegramAccessUser {
+  userId: number;
+  chatId: number;
+  username?: string;
+  firstName?: string;
+  requestedAt?: string;
+  approvedAt: string;
+}
+
+export interface TelegramPendingRequest {
+  userId: number;
+  chatId: number;
+  username?: string;
+  firstName?: string;
+  requestedAt: string;
+  pairingCode?: string;
+}
+
 export type ProviderName =
   | 'openai'
   | 'anthropic'
@@ -54,6 +72,9 @@ export interface MercuryConfig {
       webhookUrl?: string;
       allowedChatIds?: number[];
       streaming?: boolean;
+      admins: TelegramAccessUser[];
+      members: TelegramAccessUser[];
+      pending: TelegramPendingRequest[];
       pairedUserId?: number;
       pairedChatId?: number;
       pairedUsername?: string;
@@ -156,6 +177,9 @@ export function getDefaultConfig(): MercuryConfig {
           .filter(Boolean)
           .map(Number),
         streaming: getEnvBool('TELEGRAM_STREAMING', true),
+        admins: [],
+        members: [],
+        pending: [],
       },
     },
     github: {
@@ -184,9 +208,9 @@ export function loadConfig(): MercuryConfig {
     const raw = readFileSync(CONFIG_PATH, 'utf-8');
     const fileConfig = parseYaml(raw) as Partial<MercuryConfig>;
     const defaults = getDefaultConfig();
-    return deepMerge(defaults, fileConfig);
+    return migrateLegacyTelegramAccess(deepMerge(defaults, fileConfig));
   }
-  return getDefaultConfig();
+  return migrateLegacyTelegramAccess(getDefaultConfig());
 }
 
 export function saveConfig(config: MercuryConfig): void {
@@ -246,16 +270,203 @@ export function isProviderConfigured(provider: ProviderConfig): boolean {
   return provider.apiKey.length > 0;
 }
 
-export function setTelegramPairing(config: MercuryConfig, userId: number, chatId: number, username?: string): MercuryConfig {
-  config.channels.telegram.pairedUserId = userId;
-  config.channels.telegram.pairedChatId = chatId;
-  config.channels.telegram.pairedUsername = username || undefined;
+export function getTelegramApprovedUsers(config: MercuryConfig): TelegramAccessUser[] {
+  return [
+    ...config.channels.telegram.admins,
+    ...config.channels.telegram.members,
+  ];
+}
+
+export function getTelegramApprovedChatIds(config: MercuryConfig): number[] {
+  return [...new Set(getTelegramApprovedUsers(config).map((user) => user.chatId))];
+}
+
+export function getTelegramAdmins(config: MercuryConfig): TelegramAccessUser[] {
+  return config.channels.telegram.admins;
+}
+
+export function getTelegramPendingRequests(config: MercuryConfig): TelegramPendingRequest[] {
+  return config.channels.telegram.pending;
+}
+
+export function findTelegramApprovedUser(config: MercuryConfig, userId: number): TelegramAccessUser | undefined {
+  return getTelegramApprovedUsers(config).find((user) => user.userId === userId);
+}
+
+export function findTelegramAdmin(config: MercuryConfig, userId: number): TelegramAccessUser | undefined {
+  return config.channels.telegram.admins.find((user) => user.userId === userId);
+}
+
+export function findTelegramPendingRequest(config: MercuryConfig, userId: number): TelegramPendingRequest | undefined {
+  return config.channels.telegram.pending.find((request) => request.userId === userId);
+}
+
+export function findTelegramPendingRequestByPairingCode(
+  config: MercuryConfig,
+  pairingCode: string,
+): TelegramPendingRequest | undefined {
+  return config.channels.telegram.pending.find((request) => request.pairingCode === pairingCode);
+}
+
+export function hasTelegramAdmins(config: MercuryConfig): boolean {
+  return config.channels.telegram.admins.length > 0;
+}
+
+export function getTelegramAccessSummary(config: MercuryConfig): string {
+  return `${config.channels.telegram.admins.length} admin${config.channels.telegram.admins.length === 1 ? '' : 's'}, `
+    + `${config.channels.telegram.members.length} member${config.channels.telegram.members.length === 1 ? '' : 's'}, `
+    + `${config.channels.telegram.pending.length} pending`;
+}
+
+export function addTelegramPendingRequest(
+  config: MercuryConfig,
+  request: Omit<TelegramPendingRequest, 'requestedAt'> & { requestedAt?: string },
+): TelegramPendingRequest {
+  const existing = findTelegramPendingRequest(config, request.userId);
+  if (existing) {
+    existing.chatId = request.chatId;
+    existing.username = request.username || existing.username;
+    existing.firstName = request.firstName || existing.firstName;
+    existing.pairingCode = request.pairingCode || existing.pairingCode;
+    return existing;
+  }
+
+  const created: TelegramPendingRequest = {
+    ...request,
+    requestedAt: request.requestedAt || new Date().toISOString(),
+  };
+  config.channels.telegram.pending.push(created);
+  return created;
+}
+
+export function approveTelegramPendingRequest(
+  config: MercuryConfig,
+  userId: number,
+  role: 'admin' | 'member' = 'member',
+): TelegramAccessUser | null {
+  const request = findTelegramPendingRequest(config, userId);
+  if (!request) return null;
+
+  const approvedUser: TelegramAccessUser = {
+    userId: request.userId,
+    chatId: request.chatId,
+    username: request.username,
+    firstName: request.firstName,
+    requestedAt: request.requestedAt,
+    approvedAt: new Date().toISOString(),
+  };
+
+  config.channels.telegram.pending = config.channels.telegram.pending
+    .filter((entry) => entry.userId !== userId);
+  config.channels.telegram.admins = config.channels.telegram.admins
+    .filter((entry) => entry.userId !== userId);
+  config.channels.telegram.members = config.channels.telegram.members
+    .filter((entry) => entry.userId !== userId);
+
+  if (role === 'admin') {
+    config.channels.telegram.admins.push(approvedUser);
+  } else {
+    config.channels.telegram.members.push(approvedUser);
+  }
+
+  return approvedUser;
+}
+
+export function approveTelegramPendingRequestByPairingCode(
+  config: MercuryConfig,
+  pairingCode: string,
+): TelegramAccessUser | null {
+  const request = findTelegramPendingRequestByPairingCode(config, pairingCode);
+  if (!request) return null;
+  const role = hasTelegramAdmins(config) ? 'member' : 'admin';
+  return approveTelegramPendingRequest(config, request.userId, role);
+}
+
+export function rejectTelegramPendingRequest(config: MercuryConfig, userId: number): TelegramPendingRequest | null {
+  const request = findTelegramPendingRequest(config, userId);
+  if (!request) return null;
+  config.channels.telegram.pending = config.channels.telegram.pending
+    .filter((entry) => entry.userId !== userId);
+  return request;
+}
+
+export function removeTelegramUser(config: MercuryConfig, userId: number): TelegramAccessUser | null {
+  const admin = config.channels.telegram.admins.find((entry) => entry.userId === userId);
+  if (admin) {
+    config.channels.telegram.admins = config.channels.telegram.admins
+      .filter((entry) => entry.userId !== userId);
+    return admin;
+  }
+
+  const member = config.channels.telegram.members.find((entry) => entry.userId === userId);
+  if (member) {
+    config.channels.telegram.members = config.channels.telegram.members
+      .filter((entry) => entry.userId !== userId);
+    return member;
+  }
+
+  return null;
+}
+
+export function promoteTelegramUserToAdmin(config: MercuryConfig, userId: number): TelegramAccessUser | null {
+  const member = config.channels.telegram.members.find((entry) => entry.userId === userId);
+  if (!member) return null;
+  config.channels.telegram.members = config.channels.telegram.members
+    .filter((entry) => entry.userId !== userId);
+  config.channels.telegram.admins.push(member);
+  return member;
+}
+
+export function demoteTelegramAdmin(config: MercuryConfig, userId: number): TelegramAccessUser | null {
+  if (config.channels.telegram.admins.length <= 1) {
+    return null;
+  }
+
+  const admin = config.channels.telegram.admins.find((entry) => entry.userId === userId);
+  if (!admin) return null;
+  config.channels.telegram.admins = config.channels.telegram.admins
+    .filter((entry) => entry.userId !== userId);
+  config.channels.telegram.members.push(admin);
+  return admin;
+}
+
+export function clearTelegramAccess(config: MercuryConfig): MercuryConfig {
+  config.channels.telegram.admins = [];
+  config.channels.telegram.members = [];
+  config.channels.telegram.pending = [];
+  delete config.channels.telegram.pairedUserId;
+  delete config.channels.telegram.pairedChatId;
+  delete config.channels.telegram.pairedUsername;
   return config;
 }
 
 export function clearTelegramPairing(config: MercuryConfig): MercuryConfig {
-  delete config.channels.telegram.pairedUserId;
-  delete config.channels.telegram.pairedChatId;
-  delete config.channels.telegram.pairedUsername;
+  return clearTelegramAccess(config);
+}
+
+export function migrateLegacyTelegramAccess(config: MercuryConfig): MercuryConfig {
+  const telegram = config.channels.telegram;
+  telegram.admins = telegram.admins || [];
+  telegram.members = telegram.members || [];
+  telegram.pending = telegram.pending || [];
+
+  if (
+    telegram.admins.length === 0
+    && telegram.members.length === 0
+    && typeof telegram.pairedUserId === 'number'
+    && typeof telegram.pairedChatId === 'number'
+  ) {
+    telegram.admins.push({
+      userId: telegram.pairedUserId,
+      chatId: telegram.pairedChatId,
+      username: telegram.pairedUsername,
+      approvedAt: new Date().toISOString(),
+    });
+  }
+
+  delete telegram.pairedUserId;
+  delete telegram.pairedChatId;
+  delete telegram.pairedUsername;
+
   return config;
 }

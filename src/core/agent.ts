@@ -11,6 +11,21 @@ import type { ScheduledTaskManifest } from './scheduler.js';
 import { Lifecycle } from './lifecycle.js';
 import { Scheduler } from './scheduler.js';
 import { logger } from '../utils/logger.js';
+import { CLIChannel } from '../channels/cli.js';
+import type { ArrowSelectOption } from '../utils/arrow-select.js';
+import {
+  approveTelegramPendingRequest,
+  approveTelegramPendingRequestByPairingCode,
+  clearTelegramAccess,
+  demoteTelegramAdmin,
+  getTelegramAccessSummary,
+  getTelegramApprovedUsers,
+  getTelegramPendingRequests,
+  promoteTelegramUserToAdmin,
+  rejectTelegramPendingRequest,
+  removeTelegramUser,
+  saveConfig,
+} from '../utils/config.js';
 
 class ToolCallLoopDetector {
   private recentCalls: Array<{ tool: string; params: string }> = [];
@@ -676,7 +691,8 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
   }
 
   private async handleChatCommand(content: string, channelType: string, channelId: string): Promise<boolean> {
-    const cmd = content.toLowerCase().trim();
+    const trimmed = content.trim();
+    const cmd = trimmed.toLowerCase();
     const channel = this.channels.get(channelType as any);
     if (!channel) return false;
 
@@ -691,19 +707,218 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
     if (cmd === '/status') {
       const config = ctx.config();
       const budget = ctx.tokenBudget();
-      const telegramPairing = config.channels.telegram.pairedUserId != null
-        ? `paired to user ${config.channels.telegram.pairedUserId}${config.channels.telegram.pairedUsername ? ` (@${config.channels.telegram.pairedUsername})` : ''}`
-        : 'unpaired';
       const lines = [
         `**${config.identity.name}** — Status`,
         `Owner: ${config.identity.owner || '(not set)'}`,
         `Provider: ${config.providers.default}`,
         `Telegram: ${config.channels.telegram.enabled ? 'enabled' : 'disabled'}`,
-        `Telegram pairing: ${telegramPairing}`,
+        `Telegram access: ${getTelegramAccessSummary(config)}`,
         `Budget: ${budget.getStatusText()}`,
         `Skills: ${ctx.skillNames().length > 0 ? ctx.skillNames().join(', ') : 'none'}`,
       ];
       await channel.send(lines.join('\n'), channelId);
+      return true;
+    }
+
+    if (cmd.startsWith('/telegram')) {
+      if (channelType !== 'cli') {
+        await channel.send('`/telegram` is only available from the Mercury CLI chat.', channelId);
+        return true;
+      }
+
+      const config = ctx.config();
+      const rawSubcommand = trimmed.slice('/telegram'.length).trim();
+      if (!rawSubcommand && channel instanceof CLIChannel) {
+        await channel.withMenu(async (select) => {
+          await this.openCliTelegramMenu(channel, channelId, select);
+        });
+        return true;
+      }
+
+      const parts = rawSubcommand.split(/\s+/).filter(Boolean);
+      const action = parts[0]?.toLowerCase() || 'help';
+      const formatTelegramUser = (user: {
+        userId: number;
+        username?: string;
+        firstName?: string;
+        pairingCode?: string;
+      }) => {
+        const username = user.username ? ` (@${user.username})` : '';
+        const firstName = user.firstName ? ` ${user.firstName}` : '';
+        const pairingCode = user.pairingCode ? ` [code: ${user.pairingCode}]` : '';
+        return `${user.userId}${username}${firstName}${pairingCode}`;
+      };
+
+      const sendTelegramOverview = async () => {
+        const lines = [
+          '**Telegram Management**',
+          '',
+          `Access: ${getTelegramAccessSummary(config)}`,
+          `Admins: ${config.channels.telegram.admins.length > 0 ? config.channels.telegram.admins.map(formatTelegramUser).join(', ') : 'none'}`,
+          `Members: ${config.channels.telegram.members.length > 0 ? config.channels.telegram.members.map(formatTelegramUser).join(', ') : 'none'}`,
+          `Pending: ${config.channels.telegram.pending.length > 0 ? config.channels.telegram.pending.map(formatTelegramUser).join(', ') : 'none'}`,
+          '',
+          'Commands:',
+          '• `/telegram pending`',
+          '• `/telegram users`',
+          '• `/telegram approve <pairing-code|user-id>`',
+          '• `/telegram reject <user-id>`',
+          '• `/telegram remove <user-id>`',
+          '• `/telegram promote <user-id>`',
+          '• `/telegram demote <user-id>`',
+          '• `/telegram reset`',
+        ];
+        await channel.send(lines.join('\n'), channelId);
+      };
+
+      if (action === 'help' || action === 'status') {
+        await sendTelegramOverview();
+        return true;
+      }
+
+      if (action === 'pending') {
+        const pending = getTelegramPendingRequests(config);
+        const lines = [
+          '**Telegram Pending Requests**',
+          '',
+          pending.length > 0 ? pending.map(formatTelegramUser).join('\n') : 'No pending Telegram requests.',
+        ];
+        await channel.send(lines.join('\n'), channelId);
+        return true;
+      }
+
+      if (action === 'users') {
+        const approved = getTelegramApprovedUsers(config);
+        const lines = [
+          '**Telegram Approved Users**',
+          '',
+          `Admins: ${config.channels.telegram.admins.length > 0 ? config.channels.telegram.admins.map(formatTelegramUser).join(', ') : 'none'}`,
+          `Members: ${config.channels.telegram.members.length > 0 ? config.channels.telegram.members.map(formatTelegramUser).join(', ') : 'none'}`,
+          '',
+          `Total approved: ${approved.length}`,
+        ];
+        await channel.send(lines.join('\n'), channelId);
+        return true;
+      }
+
+      if (action === 'approve') {
+        const value = parts[1];
+        if (!value) {
+          await channel.send('Usage: `/telegram approve <pairing-code|user-id>`', channelId);
+          return true;
+        }
+
+        let approved = approveTelegramPendingRequestByPairingCode(config, value);
+        let resultLabel = value;
+
+        if (!approved) {
+          const userId = Number(value);
+          if (!isNaN(userId)) {
+            approved = approveTelegramPendingRequest(config, userId, 'member');
+            resultLabel = userId.toString();
+          }
+        }
+
+        if (!approved) {
+          await channel.send(`No pending Telegram request found for \`${resultLabel}\`.`, channelId);
+          return true;
+        }
+
+        saveConfig(config);
+        await channel.send(`Approved Telegram user ${formatTelegramUser(approved)}.`, channelId);
+        return true;
+      }
+
+      if (action === 'reject') {
+        const value = Number(parts[1]);
+        if (isNaN(value)) {
+          await channel.send('Usage: `/telegram reject <user-id>`', channelId);
+          return true;
+        }
+
+        const rejected = rejectTelegramPendingRequest(config, value);
+        if (!rejected) {
+          await channel.send(`No pending Telegram request found for \`${value}\`.`, channelId);
+          return true;
+        }
+
+        saveConfig(config);
+        await channel.send(`Rejected Telegram request for ${formatTelegramUser(rejected)}.`, channelId);
+        return true;
+      }
+
+      if (action === 'remove') {
+        const value = Number(parts[1]);
+        if (isNaN(value)) {
+          await channel.send('Usage: `/telegram remove <user-id>`', channelId);
+          return true;
+        }
+
+        const removed = removeTelegramUser(config, value);
+        if (!removed) {
+          await channel.send(`No approved Telegram user found for \`${value}\`.`, channelId);
+          return true;
+        }
+
+        saveConfig(config);
+        await channel.send(`Removed Telegram access for ${formatTelegramUser(removed)}.`, channelId);
+        return true;
+      }
+
+      if (action === 'promote') {
+        const value = Number(parts[1]);
+        if (isNaN(value)) {
+          await channel.send('Usage: `/telegram promote <user-id>`', channelId);
+          return true;
+        }
+
+        const promoted = promoteTelegramUserToAdmin(config, value);
+        if (!promoted) {
+          await channel.send(`No Telegram member found for \`${value}\`.`, channelId);
+          return true;
+        }
+
+        saveConfig(config);
+        await channel.send(`Promoted ${formatTelegramUser(promoted)} to Telegram admin.`, channelId);
+        return true;
+      }
+
+      if (action === 'demote') {
+        const value = Number(parts[1]);
+        if (isNaN(value)) {
+          await channel.send('Usage: `/telegram demote <user-id>`', channelId);
+          return true;
+        }
+
+        const demoted = demoteTelegramAdmin(config, value);
+        if (!demoted) {
+          await channel.send('Could not demote that Telegram admin. Mercury must keep at least one admin.', channelId);
+          return true;
+        }
+
+        saveConfig(config);
+        await channel.send(`Demoted ${formatTelegramUser(demoted)} to Telegram member.`, channelId);
+        return true;
+      }
+
+      if (action === 'reset' || action === 'unpair') {
+        config.channels.telegram.admins = [];
+        config.channels.telegram.members = [];
+        config.channels.telegram.pending = [];
+        saveConfig(config);
+        await channel.send('Telegram access reset. New users can send /start to begin pairing again.', channelId);
+        return true;
+      }
+
+      await channel.send(
+      `Unknown Telegram command "${action}". Try \`/telegram\`, \`/telegram pending\`, or \`/telegram users\`.`,
+        channelId,
+      );
+      return true;
+    }
+
+    if ((cmd === '/' || cmd === '/menu') && channelType === 'cli' && channel instanceof CLIChannel) {
+      await this.openCliCommandMenu(channel, channelId);
       return true;
     }
 
@@ -762,5 +977,258 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
     }
 
     return false;
+  }
+
+  private async openCliCommandMenu(channel: CLIChannel, channelId: string): Promise<void> {
+    const ctx = this.capabilities.getChatCommandContext();
+    if (!ctx) return;
+
+    await channel.withMenu(async (select) => {
+      while (true) {
+        const streamLabel = this.telegramStreaming ? 'Disable Telegram Streaming' : 'Enable Telegram Streaming';
+        const action = await select('Mercury Commands', [
+          { value: 'status', label: 'Status' },
+          { value: 'telegram', label: 'Telegram' },
+          { value: 'tools', label: 'Tools' },
+          { value: 'skills', label: 'Skills' },
+          { value: 'stream', label: streamLabel },
+          { value: 'help', label: 'Help' },
+          { value: 'exit', label: 'Exit' },
+        ]);
+
+        if (action === 'exit') {
+          return;
+        }
+
+        if (action === 'status') {
+          await this.handleChatCommand('/status', 'cli', channelId);
+          continue;
+        }
+
+        if (action === 'telegram') {
+          await this.openCliTelegramMenu(channel, channelId, select);
+          continue;
+        }
+
+        if (action === 'tools') {
+          await this.handleChatCommand('/tools', 'cli', channelId);
+          continue;
+        }
+
+        if (action === 'skills') {
+          await this.handleChatCommand('/skills', 'cli', channelId);
+          continue;
+        }
+
+        if (action === 'stream') {
+          await this.handleChatCommand('/stream', 'cli', channelId);
+          continue;
+        }
+
+        if (action === 'help') {
+          await channel.send(ctx.manual(), channelId);
+        }
+      }
+    });
+  }
+
+  private async openCliTelegramMenu(
+    channel: CLIChannel,
+    channelId: string,
+    select: (title: string, options: ArrowSelectOption[]) => Promise<string>,
+  ): Promise<void> {
+    const ctx = this.capabilities.getChatCommandContext();
+    if (!ctx) return;
+    const formatTelegramUser = (user: {
+      userId: number;
+      username?: string;
+      firstName?: string;
+      pairingCode?: string;
+    }) => {
+      const username = user.username ? ` (@${user.username})` : '';
+      const firstName = user.firstName ? ` ${user.firstName}` : '';
+      const pairingCode = user.pairingCode ? ` [code: ${user.pairingCode}]` : '';
+      return `${user.userId}${username}${firstName}${pairingCode}`;
+    };
+
+    const selectFromUsers = async (
+      title: string,
+      users: Array<{ userId: number; username?: string; firstName?: string; pairingCode?: string }>,
+      emptyMessage: string,
+      backValue: string = 'back',
+    ): Promise<string> => {
+      if (users.length === 0) {
+        await channel.send(emptyMessage, channelId);
+        return backValue;
+      }
+
+      return select(title, [
+        ...users.map((user) => ({
+          value: user.pairingCode || user.userId.toString(),
+          label: formatTelegramUser(user),
+        })),
+        { value: backValue, label: 'Back' },
+      ]);
+    };
+
+    while (true) {
+      const config = ctx.config();
+      const action = await select('Telegram Commands', [
+        { value: 'overview', label: 'Overview' },
+        { value: 'pending', label: `Pending Requests (${config.channels.telegram.pending.length})` },
+        { value: 'users', label: `Approved Users (${getTelegramApprovedUsers(config).length})` },
+        { value: 'approve', label: 'Approve Request' },
+        { value: 'reject', label: 'Reject Request' },
+        { value: 'remove', label: 'Remove User' },
+        { value: 'promote', label: 'Promote to Admin' },
+        { value: 'demote', label: 'Demote Admin' },
+        { value: 'reset', label: 'Reset Telegram Access' },
+        { value: 'back', label: 'Back' },
+        { value: 'exit', label: 'Exit' },
+      ]);
+
+      if (action === 'exit') {
+        return;
+      }
+
+      if (action === 'back') {
+        return;
+      }
+
+      if (action === 'overview') {
+        await this.handleChatCommand('/telegram status', 'cli', channelId);
+        continue;
+      }
+
+      if (action === 'pending') {
+        await this.handleChatCommand('/telegram pending', 'cli', channelId);
+        continue;
+      }
+
+      if (action === 'users') {
+        await this.handleChatCommand('/telegram users', 'cli', channelId);
+        continue;
+      }
+
+      if (action === 'approve') {
+        const pending = getTelegramPendingRequests(config);
+        const selected = await selectFromUsers(
+          'Approve Telegram Request',
+          pending,
+          'There are no pending Telegram requests to approve.',
+        );
+
+        if (selected === 'back') {
+          continue;
+        }
+
+        await this.handleChatCommand(`/telegram approve ${selected}`, 'cli', channelId);
+        continue;
+      }
+
+      if (action === 'reject') {
+        const pending = getTelegramPendingRequests(config);
+        const selected = await selectFromUsers(
+          'Reject Telegram Request',
+          pending,
+          'There are no pending Telegram requests to reject.',
+        );
+
+        if (selected === 'back') {
+          continue;
+        }
+
+        const request = pending.find((entry) => (entry.pairingCode || entry.userId.toString()) === selected);
+        if (!request) {
+          await channel.send('That Telegram request is no longer pending.', channelId);
+          continue;
+        }
+
+        await this.handleChatCommand(`/telegram reject ${request.userId}`, 'cli', channelId);
+        continue;
+      }
+
+      if (action === 'remove') {
+        const approved = getTelegramApprovedUsers(config);
+        const selected = await selectFromUsers(
+          'Remove Telegram User',
+          approved,
+          'There are no approved Telegram users to remove.',
+        );
+
+        if (selected === 'back') {
+          continue;
+        }
+
+        const user = approved.find((entry) => entry.userId.toString() === selected);
+        if (!user) {
+          await channel.send('That Telegram user is no longer approved.', channelId);
+          continue;
+        }
+
+        await this.handleChatCommand(`/telegram remove ${user.userId}`, 'cli', channelId);
+        continue;
+      }
+
+      if (action === 'promote') {
+        const members = config.channels.telegram.members;
+        const selected = await selectFromUsers(
+          'Promote Telegram Member',
+          members,
+          'There are no Telegram members available to promote.',
+        );
+
+        if (selected === 'back') {
+          continue;
+        }
+
+        const member = members.find((entry) => entry.userId.toString() === selected);
+        if (!member) {
+          await channel.send('That Telegram member is no longer available.', channelId);
+          continue;
+        }
+
+        await this.handleChatCommand(`/telegram promote ${member.userId}`, 'cli', channelId);
+        continue;
+      }
+
+      if (action === 'demote') {
+        const admins = config.channels.telegram.admins;
+        const selected = await selectFromUsers(
+          'Demote Telegram Admin',
+          admins,
+          'There are no Telegram admins available to demote.',
+        );
+
+        if (selected === 'back') {
+          continue;
+        }
+
+        const admin = admins.find((entry) => entry.userId.toString() === selected);
+        if (!admin) {
+          await channel.send('That Telegram admin is no longer available.', channelId);
+          continue;
+        }
+
+        await this.handleChatCommand(`/telegram demote ${admin.userId}`, 'cli', channelId);
+        continue;
+      }
+
+      if (action === 'reset') {
+        const confirmation = await select('Reset Telegram Access?', [
+          { value: 'cancel', label: 'Cancel' },
+          { value: 'confirm', label: 'Reset all Telegram access' },
+          { value: 'back', label: 'Back' },
+        ]);
+
+        if (confirmation === 'confirm') {
+          clearTelegramAccess(config);
+          saveConfig(config);
+          await channel.send('Telegram access reset. New users can send /start to begin pairing again.', channelId);
+        }
+
+        continue;
+      }
+    }
   }
 }

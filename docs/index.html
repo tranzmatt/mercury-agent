@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Mercury — Soul-Driven AI Agent with Permission Guardrails | Cosmic Stack</title>
   <meta name="description"
-    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, full control, and GitHub companion. Runs 24/7 from CLI or Telegram. 31 built-in tools, skill system, scheduling.">
+    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, full control, and GitHub companion. Runs 24/7 from CLI or Telegram with multi-provider onboarding, model selection, skills, and scheduling.">
   <meta name="author" content="Cosmic Stack">
   <meta name="robots" content="index, follow">
   <meta name="keywords"
@@ -17,7 +17,7 @@
   <!-- Open Graph -->
   <meta property="og:title" content="Mercury — Soul-Driven AI Agent with Permission Guardrails">
   <meta property="og:description"
-    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, and full control. Runs 24/7 from CLI or Telegram.">
+    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, and full control. Runs 24/7 from CLI or Telegram with multi-provider onboarding and model selection.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://mercury.cosmicstack.org">
   <meta property="og:image" content="https://mercury.cosmicstack.org/card.png">
@@ -32,7 +32,7 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Mercury — Soul-Driven AI Agent with Permission Guardrails">
   <meta name="twitter:description"
-    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, and full control.">
+    content="The AI agent that asks before it acts. Permission guardrails, token efficiency, and full control with multi-provider onboarding.">
   <meta name="twitter:image" content="https://mercury.cosmicstack.org/card.png">
   <meta name="twitter:image:alt"
     content="Mercury — Soul-Driven AI Agent. Permission Guardrails. Token Efficiency. Full Control.">
@@ -150,7 +150,7 @@
         <div class="feature-card" data-reveal>
           <div class="feature-icon">📡</div>
           <h3>Multi-Channel</h3>
-          <p>CLI with readline and text streaming. Telegram with typing indicators, HTML formatting, and file uploads.
+          <p>CLI with readline and arrow-key command menus. Telegram with typing indicators, HTML formatting, file uploads, and private 1:1 access approval.
             More channels coming: Signal, Discord, Slack, WhatsApp.</p>
         </div>
         <div class="feature-card" data-reveal>
@@ -187,8 +187,7 @@
           <div class="terminal-inline">
             <code>mercury</code>
           </div>
-          <p>First run triggers the onboarding wizard. Enter your name, an API key, and optionally a Telegram bot token.
-            Takes 30 seconds.</p>
+          <p>First run triggers the onboarding wizard. Choose one or more providers, validate each key by fetching models, pick your default model, and optionally pair Telegram with a bot token plus pairing code.</p>
         </div>
         <div class="step" data-reveal>
           <div class="step-number">3</div>
@@ -237,7 +236,13 @@
           </ul>
         </div>
         <div class="cap-group" data-reveal>
-          <h3>🐚 Shell &amp; Messaging</h3>
+          <h3>💬 Messaging</h3>
+          <ul>
+            <li><code>send_message</code> — Send a message to approved Telegram recipients</li>
+          </ul>
+        </div>
+        <div class="cap-group" data-reveal>
+          <h3>🐚 Shell</h3>
           <ul>
             <li><code>run_command</code> — Execute shell commands</li>
             <li><code>cd</code> — Change working directory (persists)</li>
@@ -447,7 +452,7 @@
             <li><code>mercury restart</code> — Restart background process</li>
             <li><code>mercury stop</code> — Stop background process</li>
             <li><code>mercury doctor</code> — Reconfigure (Enter keeps values)</li>
-            <li><code>/help</code> <code>/status</code> <code>/budget</code> — In-chat commands</li>
+            <li><code>/</code> <code>/menu</code> <code>/telegram</code> — Arrow-key command menus in CLI chat</li>
           </ul>
         </div>
         <div class="cap-group" data-reveal>
@@ -523,11 +528,11 @@
           <div class="arch-value">Vercel AI SDK v4</div>
           <div class="arch-desc">streamText + generateText, 10-step agentic loop</div>
         </div>
-          <div class="arch-card" data-reveal>
-            <div class="arch-label">Providers</div>
-            <div class="arch-value">DeepSeek · OpenAI · Anthropic · Grok · Ollama</div>
-            <div class="arch-desc">6 providers with fallback and last-successful tracking</div>
-          </div>
+        <div class="arch-card" data-reveal>
+          <div class="arch-label">Providers</div>
+          <div class="arch-value">DeepSeek · OpenAI · Anthropic · Grok · Ollama Cloud · Ollama Local</div>
+          <div class="arch-desc">Validated onboarding, model discovery, and fallback with last-successful tracking</div>
+        </div>
         <div class="arch-card" data-reveal>
           <div class="arch-label">Memory</div>
           <div class="arch-value">Flat-file JSONL/JSON</div>
@@ -536,7 +541,7 @@
         <div class="arch-card" data-reveal>
           <div class="arch-label">Telegram</div>
           <div class="arch-value">grammY</div>
-          <div class="arch-desc">Long polling, typing loop, HTML formatting, file uploads</div>
+          <div class="arch-desc">Long polling, pairing codes, CLI-managed access requests, broadcasts, file uploads</div>
         </div>
         <div class="arch-card" data-reveal>
           <div class="arch-label">Runtime Data</div>

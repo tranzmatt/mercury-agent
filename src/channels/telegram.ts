@@ -4,26 +4,39 @@ import { Bot, InputFile, InlineKeyboard } from 'grammy';
 import { autoRetry } from '@grammyjs/auto-retry';
 import type { ChannelMessage } from '../types/channel.js';
 import { BaseChannel } from './base.js';
-import type { MercuryConfig } from '../utils/config.js';
-import { saveConfig, clearTelegramPairing, setTelegramPairing } from '../utils/config.js';
+import type { MercuryConfig, TelegramAccessUser, TelegramPendingRequest } from '../utils/config.js';
+import {
+  addTelegramPendingRequest,
+  approveTelegramPendingRequest,
+  clearTelegramAccess,
+  findTelegramAdmin,
+  findTelegramApprovedUser,
+  findTelegramPendingRequest,
+  getTelegramAccessSummary,
+  getTelegramAdmins,
+  getTelegramApprovedChatIds,
+  hasTelegramAdmins,
+  rejectTelegramPendingRequest,
+  saveConfig,
+} from '../utils/config.js';
 import { logger } from '../utils/logger.js';
 import { mdToTelegram } from '../utils/markdown.js';
 
 const MAX_MESSAGE_LENGTH = 4096;
+const ACCESS_ACTION_PREFIX = 'tg_access';
 
 type ApprovalResolver = (response: 'yes' | 'always' | 'no') => void;
 
 export class TelegramChannel extends BaseChannel {
   readonly type = 'telegram' as const;
   private bot: Bot | null = null;
-  private ownerChatId: number | null = null;
+  private lastActiveChatId: number | null = null;
   private typingInterval: NodeJS.Timeout | null = null;
   private chatCommandContext?: import('../capabilities/registry.js').ChatCommandContext;
   private pendingApprovals: Map<string, ApprovalResolver> = new Map();
 
   constructor(private config: MercuryConfig) {
     super();
-    this.ownerChatId = config.channels.telegram.pairedChatId ?? null;
   }
 
   setChatCommandContext(ctx: import('../capabilities/registry.js').ChatCommandContext): void {
@@ -43,7 +56,10 @@ export class TelegramChannel extends BaseChannel {
     bot.on('message:text', async (ctx) => {
       const chatId = ctx.chat.id;
       const userId = ctx.from?.id;
+      const username = ctx.from?.username;
+      const firstName = ctx.from?.first_name;
       const text = ctx.message.text?.trim() || '';
+      const command = this.getCommandName(text);
 
       if (!userId) return;
 
@@ -52,28 +68,36 @@ export class TelegramChannel extends BaseChannel {
         return;
       }
 
-      if (!this.isPaired()) {
-        await this.handleUnpairedMessage(userId, chatId, text, ctx.from?.username);
+      if (command === '/start' || command === '/pair') {
+        await this.handleAccessRequest(userId, chatId, username, firstName);
         return;
       }
 
-      if (!this.isAuthorizedUser(userId)) {
-        await this.sendDirectMessage(chatId, 'This bot is not available to you.');
+      const approvedUser = findTelegramApprovedUser(this.config, userId);
+      if (!approvedUser) {
+        const pending = findTelegramPendingRequest(this.config, userId);
+        if (pending) {
+          await this.sendDirectMessage(chatId, this.getPendingStatusMessage());
+        } else {
+          await this.sendDirectMessage(chatId, 'This bot is not available to you. Send /start to request access.');
+        }
         return;
       }
 
-      this.ownerChatId = chatId;
+      this.lastActiveChatId = chatId;
       logger.info({ chatId, text: ctx.message.text?.slice(0, 50) }, 'Telegram message received');
 
-      const command = text.toLowerCase();
-      if (command === '/start' || command === '/pair') {
-        await this.sendDirectMessage(chatId, this.getPairingStatusMessage());
-        return;
-      }
-
       if (command === '/unpair') {
-        this.unpair();
-        await this.sendDirectMessage(chatId, 'Telegram pairing removed. Send /start to pair this Mercury instance again.');
+        if (!this.isAdminUser(userId)) {
+          await this.sendDirectMessage(chatId, 'Only Telegram admins can reset Telegram access.');
+          return;
+        }
+
+        this.resetAccess();
+        await this.sendDirectMessage(
+          chatId,
+          'Telegram access reset. New users can send /start to request access. The first request must be approved from the Mercury CLI.',
+        );
         return;
       }
 
@@ -92,6 +116,11 @@ export class TelegramChannel extends BaseChannel {
 
     bot.on('callback_query:data', async (ctx) => {
       const data = ctx.callbackQuery.data;
+      if (data.startsWith(`${ACCESS_ACTION_PREFIX}:`)) {
+        await this.handleAccessCallback(ctx, data);
+        return;
+      }
+
       const resolver = this.pendingApprovals.get(data);
       if (!resolver) {
         await ctx.answerCallbackQuery({ text: 'Expired' });
@@ -111,12 +140,27 @@ export class TelegramChannel extends BaseChannel {
 
     this.bot = bot;
 
-    await bot.start({
-      onStart: async (info) => {
-        logger.info({ bot: info.username }, 'Telegram bot started — long polling active');
-        this.ready = true;
-        await this.registerCommands();
-      },
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+
+      void bot.start({
+        onStart: async (info) => {
+          logger.info({ bot: info.username }, 'Telegram bot started — long polling active');
+          this.ready = true;
+          await this.registerCommands();
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+        },
+      }).catch((err: any) => {
+        if (!settled) {
+          settled = true;
+          reject(err);
+          return;
+        }
+        logger.error({ err: err.message }, 'Telegram bot start loop failed after startup');
+      });
     });
   }
 
@@ -124,8 +168,8 @@ export class TelegramChannel extends BaseChannel {
     if (!this.bot) return;
 
     const commands = [
-      { command: 'start', description: 'Pair this Telegram account to Mercury' },
-      { command: 'pair', description: 'Pair this Telegram account to Mercury' },
+      { command: 'start', description: 'Request Telegram access to this Mercury instance' },
+      { command: 'pair', description: 'Request Telegram access to this Mercury instance' },
       { command: 'help', description: 'Show capabilities and commands manual' },
       { command: 'status', description: 'Show agent config, budget, and uptime' },
       { command: 'tools', description: 'List all loaded tools' },
@@ -135,7 +179,7 @@ export class TelegramChannel extends BaseChannel {
       { command: 'budget_reset', description: 'Reset token usage to zero' },
       { command: 'budget_set', description: 'Set new daily token budget' },
       { command: 'stream', description: 'Toggle text streaming on/off' },
-      { command: 'unpair', description: 'Remove Telegram pairing for this Mercury instance' },
+      { command: 'unpair', description: 'Reset all Telegram access for this Mercury instance' },
     ];
 
     try {
@@ -153,84 +197,95 @@ export class TelegramChannel extends BaseChannel {
   }
 
   async send(content: string, targetId?: string, elapsedMs?: number): Promise<void> {
-    const chatId = this.parseChatId(targetId);
-    if (!chatId || !this.bot) {
-      logger.warn({ targetId, chatId }, 'Telegram send: no valid chat ID');
+    const chatIds = this.resolveTargetChatIds(targetId);
+    if (chatIds.length === 0 || !this.bot) {
+      logger.warn({ targetId, chatIds }, 'Telegram send: no valid chat IDs');
       return;
     }
+
     const timeSuffix = elapsedMs != null ? `\n⏱ ${(elapsedMs / 1000).toFixed(1)}s` : '';
     const fullContent = content + timeSuffix;
     const html = mdToTelegram(fullContent);
     const chunks = this.splitMessage(html, MAX_MESSAGE_LENGTH);
 
-    for (const chunk of chunks) {
-      try {
-        await this.bot.api.sendMessage(chatId, chunk, { parse_mode: 'HTML' });
-      } catch (err: any) {
-        logger.warn({ err: err.message }, 'HTML parse failed, sending as plain text');
+    for (const chatId of chatIds) {
+      for (const chunk of chunks) {
         try {
-          await this.bot.api.sendMessage(chatId, this.stripHtml(chunk));
-        } catch (err2: any) {
-          logger.error({ err: err2.message }, 'Telegram send failed');
+          await this.bot.api.sendMessage(chatId, chunk, { parse_mode: 'HTML' });
+        } catch (err: any) {
+          logger.warn({ err: err.message, chatId }, 'HTML parse failed, sending as plain text');
+          try {
+            await this.bot.api.sendMessage(chatId, this.stripHtml(chunk));
+          } catch (err2: any) {
+            logger.error({ err: err2.message, chatId }, 'Telegram send failed');
+          }
         }
       }
     }
   }
 
   async sendFile(filePath: string, targetId?: string): Promise<void> {
-    const chatId = this.parseChatId(targetId);
-    if (!chatId || !this.bot) {
-      logger.warn({ targetId, chatId }, 'Telegram sendFile: no valid chat ID');
-      return;
-    }
-    const resolved = path.resolve(filePath);
-    if (!fs.existsSync(resolved)) {
-      await this.bot.api.sendMessage(chatId, `File not found: ${filePath}`);
+    const chatIds = this.resolveTargetChatIds(targetId);
+    if (chatIds.length === 0 || !this.bot) {
+      logger.warn({ targetId, chatIds }, 'Telegram sendFile: no valid chat IDs');
       return;
     }
 
-    const inputFile = new InputFile(resolved);
+    const resolved = path.resolve(filePath);
+    if (!fs.existsSync(resolved)) {
+      for (const chatId of chatIds) {
+        await this.bot.api.sendMessage(chatId, `File not found: ${filePath}`).catch(() => {});
+      }
+      return;
+    }
+
     const filename = path.basename(resolved);
     const ext = path.extname(resolved).toLowerCase();
 
-    try {
-      if (this.isImageFile(ext)) {
-        await this.bot.api.sendPhoto(chatId, inputFile, { caption: filename });
-      } else if (this.isAudioFile(ext)) {
-        await this.bot.api.sendAudio(chatId, inputFile, { title: filename });
-      } else if (this.isVideoFile(ext)) {
-        await this.bot.api.sendVideo(chatId, inputFile, { caption: filename });
-      } else {
-        await this.bot.api.sendDocument(chatId, inputFile, { caption: filename });
+    for (const chatId of chatIds) {
+      const inputFile = new InputFile(resolved);
+
+      try {
+        if (this.isImageFile(ext)) {
+          await this.bot.api.sendPhoto(chatId, inputFile, { caption: filename });
+        } else if (this.isAudioFile(ext)) {
+          await this.bot.api.sendAudio(chatId, inputFile, { title: filename });
+        } else if (this.isVideoFile(ext)) {
+          await this.bot.api.sendVideo(chatId, inputFile, { caption: filename });
+        } else {
+          await this.bot.api.sendDocument(chatId, inputFile, { caption: filename });
+        }
+        logger.info({ file: resolved, chatId }, 'File sent via Telegram');
+      } catch (err: any) {
+        logger.error({ err: err.message, file: resolved, chatId }, 'Telegram sendFile failed');
+        await this.bot.api.sendMessage(chatId, `Failed to send file: ${err.message}`).catch(() => {});
       }
-      logger.info({ file: resolved, chatId }, 'File sent via Telegram');
-    } catch (err: any) {
-      logger.error({ err: err.message, file: resolved }, 'Telegram sendFile failed');
-      await this.bot.api.sendMessage(chatId, `Failed to send file: ${err.message}`).catch(() => {});
     }
   }
 
   async stream(content: AsyncIterable<string>, targetId?: string): Promise<string> {
-    const chatId = this.parseChatId(targetId);
-    if (!chatId || !this.bot) return '';
+    const chatIds = this.resolveTargetChatIds(targetId);
+    if (chatIds.length === 0 || !this.bot) return '';
 
     let full = '';
     for await (const chunk of content) {
       full += chunk;
     }
     const html = mdToTelegram(full);
-    try {
-      await this.bot.api.sendMessage(chatId, html, { parse_mode: 'HTML' });
-    } catch (err: any) {
-      await this.bot.api.sendMessage(chatId, this.stripHtml(html));
+    for (const chatId of chatIds) {
+      try {
+        await this.bot.api.sendMessage(chatId, html, { parse_mode: 'HTML' });
+      } catch (err: any) {
+        await this.bot.api.sendMessage(chatId, this.stripHtml(html)).catch(() => {});
+      }
     }
     return full;
   }
 
   async typing(targetId?: string): Promise<void> {
-    const chatId = this.parseChatId(targetId);
-    if (!chatId || !this.bot) return;
-    await this.bot.api.sendChatAction(chatId, 'typing');
+    const chatIds = this.resolveTargetChatIds(targetId);
+    if (chatIds.length === 0 || !this.bot) return;
+    await this.bot.api.sendChatAction(chatIds[0], 'typing');
   }
 
   startTypingLoop(chatId: number): void {
@@ -316,7 +371,8 @@ export class TelegramChannel extends BaseChannel {
   }
 
   async askPermission(prompt: string, targetId?: string): Promise<string> {
-    const chatId = this.parseChatId(targetId);
+    const chatIds = this.resolveTargetChatIds(targetId);
+    const chatId = chatIds[0];
     if (!chatId || !this.bot) return 'no';
 
     const id = `perm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -350,6 +406,208 @@ export class TelegramChannel extends BaseChannel {
         resolve('no');
       }, 120_000);
     });
+  }
+
+  private async handleAccessRequest(
+    userId: number,
+    chatId: number,
+    username?: string,
+    firstName?: string,
+  ): Promise<void> {
+    const approvedUser = findTelegramApprovedUser(this.config, userId);
+    if (approvedUser) {
+      await this.sendDirectMessage(chatId, this.getApprovedStatusMessage(approvedUser));
+      return;
+    }
+
+    const existingRequest = findTelegramPendingRequest(this.config, userId);
+    if (existingRequest) {
+      await this.sendDirectMessage(chatId, this.getPendingStatusMessage(existingRequest));
+      return;
+    }
+
+    if (!hasTelegramAdmins(this.config) && this.config.channels.telegram.pending.length > 0) {
+      await this.sendDirectMessage(
+        chatId,
+        'Initial Telegram pairing is already in progress for another user. Ask the Mercury operator to finish setup or reset Telegram access first.',
+      );
+      return;
+    }
+
+    const request = addTelegramPendingRequest(this.config, {
+      userId,
+      chatId,
+      username,
+      firstName,
+      pairingCode: hasTelegramAdmins(this.config) ? undefined : this.generatePairingCode(),
+    });
+    saveConfig(this.config);
+    logger.info({ chatId, userId, username }, 'Telegram access request recorded');
+
+    await this.sendDirectMessage(chatId, this.getPendingStatusMessage(request));
+
+    if (!hasTelegramAdmins(this.config)) {
+      return;
+    }
+
+    await this.notifyAdminsOfPendingRequest(request);
+  }
+
+  private async notifyAdminsOfPendingRequest(request: TelegramPendingRequest): Promise<void> {
+    if (!this.bot) return;
+
+    const keyboard = new InlineKeyboard()
+      .text('Approve', `${ACCESS_ACTION_PREFIX}:approve:${request.userId}`)
+      .text('Reject', `${ACCESS_ACTION_PREFIX}:reject:${request.userId}`);
+
+    const username = request.username ? ` (@${request.username})` : '';
+    const firstName = request.firstName ? ` (${request.firstName})` : '';
+    const message = [
+      'Telegram access request pending approval.',
+      '',
+      `User ID: ${request.userId}${username}${firstName}`,
+      `Requested: ${new Date(request.requestedAt).toLocaleString()}`,
+      '',
+      'Use the buttons below to approve or reject this user.',
+    ].join('\n');
+
+    for (const admin of getTelegramAdmins(this.config)) {
+      try {
+        await this.bot.api.sendMessage(admin.chatId, mdToTelegram(message), {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+      } catch {
+        await this.bot.api.sendMessage(admin.chatId, message, {
+          reply_markup: keyboard,
+        }).catch(() => {});
+      }
+    }
+  }
+
+  private async handleAccessCallback(ctx: Parameters<Bot['on']>[1] extends never ? never : any, data: string): Promise<void> {
+    const actorUserId = ctx.from?.id;
+    const actorChatId = ctx.chat?.id;
+    if (!actorUserId || !actorChatId) {
+      await ctx.answerCallbackQuery({ text: 'Unavailable' });
+      return;
+    }
+
+    if (!this.isAdminUser(actorUserId)) {
+      await ctx.answerCallbackQuery({ text: 'Admins only' });
+      return;
+    }
+
+    const [, action, rawUserId] = data.split(':');
+    const requestUserId = Number(rawUserId);
+    if (!requestUserId) {
+      await ctx.answerCallbackQuery({ text: 'Invalid request' });
+      return;
+    }
+
+    const request = findTelegramPendingRequest(this.config, requestUserId);
+    if (!request) {
+      await ctx.answerCallbackQuery({ text: 'Already handled' });
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+      return;
+    }
+
+    if (action === 'approve') {
+      const approved = approveTelegramPendingRequest(this.config, requestUserId, 'member');
+      if (!approved) {
+        await ctx.answerCallbackQuery({ text: 'Already handled' });
+        return;
+      }
+
+      saveConfig(this.config);
+      await ctx.answerCallbackQuery({ text: 'Approved' });
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+      await this.sendDirectMessage(
+        request.chatId,
+        `Telegram access approved. You can now chat with Mercury.\n\nTelegram access: ${getTelegramAccessSummary(this.config)}`,
+      );
+      await this.sendDirectMessage(actorChatId, `Approved Telegram access for ${this.formatRequestLabel(request)}.`);
+      return;
+    }
+
+    if (action === 'reject') {
+      const rejected = rejectTelegramPendingRequest(this.config, requestUserId);
+      if (!rejected) {
+        await ctx.answerCallbackQuery({ text: 'Already handled' });
+        return;
+      }
+
+      saveConfig(this.config);
+      await ctx.answerCallbackQuery({ text: 'Rejected' });
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+      await this.sendDirectMessage(
+        request.chatId,
+        'Your Telegram access request was rejected. This bot is not available to you.',
+      );
+      await this.sendDirectMessage(actorChatId, `Rejected Telegram access for ${this.formatRequestLabel(request)}.`);
+      return;
+    }
+
+    await ctx.answerCallbackQuery({ text: 'Unknown action' });
+  }
+
+  private resolveTargetChatIds(targetId?: string): number[] {
+    if (!targetId || targetId === 'notification') {
+      return getTelegramApprovedChatIds(this.config);
+    }
+
+    if (targetId.startsWith('telegram:')) {
+      const raw = Number(targetId.split(':')[1]);
+      return isNaN(raw) ? [] : [raw];
+    }
+
+    const num = Number(targetId);
+    return isNaN(num) ? [] : [num];
+  }
+
+  private isAdminUser(userId: number): boolean {
+    return !!findTelegramAdmin(this.config, userId);
+  }
+
+  private getCommandName(text: string): string {
+    return text.trim().split(/\s+/)[0]?.toLowerCase() || '';
+  }
+
+  private getPendingStatusMessage(request?: TelegramPendingRequest): string {
+    if (!hasTelegramAdmins(this.config)) {
+      const pairingCode = request?.pairingCode ?? 'unknown';
+      return [
+        'Your Telegram pairing request has been recorded.',
+        '',
+        `Pairing code: ${pairingCode}`,
+        '',
+        'Enter this code in the Mercury terminal to finish setup.',
+      ].join('\n');
+    }
+
+    return 'Your Telegram access request has been recorded and is waiting for approval from a Telegram admin.';
+  }
+
+  private getApprovedStatusMessage(user: TelegramAccessUser): string {
+    const role = this.isAdminUser(user.userId) ? 'admin' : 'member';
+    return `You are already approved as a Telegram ${role}.\n\nTelegram access: ${getTelegramAccessSummary(this.config)}`;
+  }
+
+  private formatRequestLabel(request: TelegramPendingRequest): string {
+    const username = request.username ? ` (@${request.username})` : '';
+    const firstName = request.firstName ? ` ${request.firstName}` : '';
+    return `${request.userId}${username}${firstName}`;
+  }
+
+  private resetAccess(): void {
+    clearTelegramAccess(this.config);
+    saveConfig(this.config);
+    this.lastActiveChatId = null;
+    logger.info('Telegram access reset');
+  }
+
+  private generatePairingCode(): string {
+    return Math.floor(100000 + Math.random() * 900000).toString();
   }
 
   private escapeHtml(text: string): string {
@@ -398,57 +656,6 @@ export class TelegramChannel extends BaseChannel {
 
   private isVideoFile(ext: string): boolean {
     return ['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext);
-  }
-
-  private parseChatId(targetId?: string): number | null {
-    if (!targetId) return this.ownerChatId ?? this.config.channels.telegram.pairedChatId ?? null;
-    if (targetId.startsWith('telegram:')) {
-      const raw = Number(targetId.split(':')[1]);
-      return isNaN(raw) ? this.ownerChatId ?? this.config.channels.telegram.pairedChatId ?? null : raw;
-    }
-    if (targetId === 'notification') return this.ownerChatId ?? this.config.channels.telegram.pairedChatId ?? null;
-    const num = Number(targetId);
-    return isNaN(num) ? this.ownerChatId ?? this.config.channels.telegram.pairedChatId ?? null : num;
-  }
-
-  private isPaired(): boolean {
-    return typeof this.config.channels.telegram.pairedUserId === 'number';
-  }
-
-  private isAuthorizedUser(userId: number): boolean {
-    return this.config.channels.telegram.pairedUserId === userId;
-  }
-
-  private async handleUnpairedMessage(userId: number, chatId: number, text: string, username?: string): Promise<void> {
-    const command = text.toLowerCase();
-    if (command === '/start' || command === '/pair') {
-      setTelegramPairing(this.config, userId, chatId, username);
-      saveConfig(this.config);
-      this.ownerChatId = chatId;
-      logger.info({ chatId, userId, username }, 'Telegram paired to owner');
-      await this.sendDirectMessage(chatId, this.getPairingStatusMessage(true));
-      return;
-    }
-
-    await this.sendDirectMessage(
-      chatId,
-      'This Mercury instance is not paired yet. Send /start to pair this bot to your Telegram account.',
-    );
-  }
-
-  private getPairingStatusMessage(newlyPaired: boolean = false): string {
-    const username = this.config.channels.telegram.pairedUsername
-      ? ` (@${this.config.channels.telegram.pairedUsername})`
-      : '';
-    const prefix = newlyPaired ? 'Telegram paired successfully.' : 'This Telegram account is already paired.';
-    return `${prefix}\n\nOwner user ID: ${this.config.channels.telegram.pairedUserId}${username}`;
-  }
-
-  private unpair(): void {
-    clearTelegramPairing(this.config);
-    saveConfig(this.config);
-    this.ownerChatId = null;
-    logger.info('Telegram pairing cleared');
   }
 
   private async sendDirectMessage(chatId: number, content: string): Promise<void> {

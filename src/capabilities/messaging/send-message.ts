@@ -6,9 +6,9 @@ export function createSendMessageTool(
 ) {
   return tool({
     description:
-      'Send a message to the paired user through the configured outbound channel. Currently this sends only to the paired Telegram owner. Use this only when the user explicitly asks you to send something to Telegram or asks for scheduled results to be sent there.',
+      'Send a message through the configured outbound channel. For Telegram this sends to the approved Telegram recipients. Use this only when the user explicitly asks you to send something to Telegram or asks for scheduled results to be sent there.',
     parameters: z.object({
-      content: z.string().describe('The message content to send to the paired Telegram owner'),
+      content: z.string().describe('The message content to send to the approved Telegram recipients'),
     }),
     execute: async ({ content }) => {
       const trimmed = content.trim();
@@ -18,7 +18,7 @@ export function createSendMessageTool(
 
       try {
         await sendMessage(trimmed);
-        return 'Message sent to the paired Telegram owner.';
+        return 'Message sent to the approved Telegram recipients.';
       } catch (err: any) {
         return `Error sending message: ${err.message}`;
       }
