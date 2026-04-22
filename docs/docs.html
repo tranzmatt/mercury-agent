@@ -904,27 +904,109 @@
       <p>Mercury connects to Telegram via a bot token, providing a mobile-first interface with streaming, file uploads,
         and inline approval keyboards.</p>
 
-      <h3>Pairing</h3>
-      <p>Mercury uses a <strong>single-owner pairing model</strong>. Only one Telegram account can be paired to a Mercury
-        instance at a time. This ensures your agent only responds to you.</p>
+      <h3>Access Model</h3>
+      <p>Mercury uses an <strong>organization access model</strong> with admins and members. The first user becomes the
+        admin by completing a pairing-code flow during setup. Additional users request access by sending
+        <code>/start</code>, which admins can approve or reject.</p>
 
       <div class="callout" style="border-left-color: var(--cyan); background: rgba(0, 212, 255, 0.06);">
-        <div class="callout-title">Initial message only</div>
-        <p>When the bot is <strong>not yet paired</strong>, only the <code>/start</code> or <code>/pair</code> command
-          is processed. All other messages from unpaired users are ignored with a prompt to pair first. This prevents
-          unauthorized access — nobody can send commands to your Mercury instance without pairing.</p>
+        <div class="callout-title">First-time pairing</div>
+        <p>When no admins exist yet, sending <code>/start</code> creates a <strong>pairing code</strong> that must be entered in the CLI to complete setup. This ensures only the legitimate owner can gain initial access. Once an admin exists, new users send
+          <code>/start</code> to create a pending request that admins can approve or reject.</p>
       </div>
-
-      <p><strong>To pair:</strong> Send <code>/start</code> or <code>/pair</code> to your Mercury bot in a private chat.
-        The bot records your Telegram user ID and chat ID, and from that point forward, only your messages are processed.</p>
-
-      <p><strong>To unpair:</strong> Send <code>/unpair</code> to remove the pairing. The bot will then require
-        <code>/start</code> again to re-pair.</p>
 
       <div class="callout callout-warn">
         <div class="callout-title">Private chats only</div>
-        <p>Mercury only works in private (one-to-one) chats. Messages in groups or channels are ignored.</p>
+        <p>Mercury only works in private (one-to-one) chats. Messages in groups or channels are always ignored.</p>
       </div>
+
+      <h4>Roles</h4>
+      <table class="cmd-table">
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Description</th>
+            <th>Can approve requests?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Admin</strong></td>
+            <td>First user to pair. Can approve/reject access requests, promote/demote users, and reset all access.</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td><strong>Member</strong></td>
+            <td>Approved by an admin. Can send messages and receive responses.</td>
+            <td>No</td>
+          </tr>
+          <tr>
+            <td><strong>Pending</strong></td>
+            <td>Sent <code>/start</code> but not yet approved. Can only see their pending status.</td>
+            <td>No</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4>CLI Commands</h4>
+      <table class="cmd-table">
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>mercury telegram list</code></td>
+            <td>Show approved admins, members, and pending requests</td>
+          </tr>
+          <tr>
+            <td><code>mercury telegram approve &lt;code|userId&gt;</code></td>
+            <td>Approve the first pairing code or a pending request by user ID</td>
+          </tr>
+          <tr>
+            <td><code>mercury telegram reject &lt;userId&gt;</code></td>
+            <td>Reject a pending access request</td>
+          </tr>
+          <tr>
+            <td><code>mercury telegram remove &lt;userId&gt;</code></td>
+            <td>Remove an approved admin or member</td>
+          </tr>
+          <tr>
+            <td><code>mercury telegram promote &lt;userId&gt;</code></td>
+            <td>Promote a member to admin</td>
+          </tr>
+          <tr>
+            <td><code>mercury telegram demote &lt;userId&gt;</code></td>
+            <td>Demote an admin to member (at least one admin must remain)</td>
+          </tr>
+          <tr>
+            <td><code>mercury telegram reset</code></td>
+            <td>Clear all Telegram access (admins, members, pending). Start fresh.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4>In-Chat Commands</h4>
+      <table class="cmd-table">
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/start</code> or <code>/pair</code></td>
+            <td>Request access (new users) or check status (approved users)</td>
+          </tr>
+          <tr>
+            <td><code>/unpair</code></td>
+            <td>Admin only: Reset all Telegram access for this Mercury instance</td>
+          </tr>
+        </tbody>
+      </table>
 
       <h3>Features</h3>
       <table class="cmd-table">
@@ -952,8 +1034,8 @@
             <td>Shell command and scope approvals shown as Allow / Always / Deny buttons</td>
           </tr>
           <tr>
-            <td>Paired messaging</td>
-            <td>The <code>send_message</code> tool lets Mercury proactively send you messages</td>
+            <td>Multi-user access</td>
+            <td>Organization model with admins and members. <code>send_message</code> broadcasts to all approved users.</td>
           </tr>
           <tr>
             <td>Bot commands menu</td>

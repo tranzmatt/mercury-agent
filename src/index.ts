@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { Command } from 'commander';
 import readline from 'node:readline';
 import chalk from 'chalk';
-import figlet from 'figlet';
+
 import {
   loadConfig,
   saveConfig,
