@@ -6,9 +6,23 @@ export interface ArrowSelectOption {
   label: string;
 }
 
+export interface ArrowSelectConfig {
+  helperText?: string;
+  maxVisibleOptions?: number;
+  signal?: AbortSignal;
+}
+
+export class ArrowSelectCancelledError extends Error {
+  constructor(message: string = 'Arrow select cancelled') {
+    super(message);
+    this.name = 'ArrowSelectCancelledError';
+  }
+}
+
 export async function selectWithArrowKeys(
   title: string,
   options: ArrowSelectOption[],
+  config: ArrowSelectConfig = {},
 ): Promise<string> {
   if (!process.stdin.isTTY || !process.stdout.isTTY || options.length === 0) {
     return options[0]?.value ?? '';
@@ -19,37 +33,82 @@ export async function selectWithArrowKeys(
   const stdin = process.stdin;
   const stdout = process.stdout;
   const canUseRawMode = typeof stdin.setRawMode === 'function';
+  const helperText = config.helperText || 'Use the arrow keys, then press Enter.';
+  const maxVisibleOptions = Math.max(
+    1,
+    Math.min(
+      options.length,
+      config.maxVisibleOptions ?? Math.max(5, (stdout.rows || 12) - 7),
+    ),
+  );
   let activeIndex = 0;
   let renderedLineCount = 0;
+  let windowStart = 0;
 
-  const render = () => {
+  const topIndicator = (hasHiddenAbove: boolean) => (
+    hasHiddenAbove ? chalk.dim('  ↑ more') : '  '
+  );
+  const bottomIndicator = (hasHiddenBelow: boolean) => (
+    hasHiddenBelow ? chalk.dim('  ↓ more') : '  '
+  );
+
+  const writeLines = (lines: string[]) => {
     if (renderedLineCount > 0) {
-      readline.moveCursor(stdout, 0, -renderedLineCount);
-      readline.clearScreenDown(stdout);
+      readline.moveCursor(stdout, 0, -(renderedLineCount - 1));
     }
 
+    for (let index = 0; index < lines.length; index += 1) {
+      readline.cursorTo(stdout, 0);
+      readline.clearLine(stdout, 0);
+      stdout.write(lines[index]);
+      if (index < lines.length - 1) {
+        stdout.write('\n');
+      }
+    }
+  };
+
+  const render = () => {
+    if (activeIndex < windowStart) {
+      windowStart = activeIndex;
+    } else if (activeIndex >= windowStart + maxVisibleOptions) {
+      windowStart = activeIndex - maxVisibleOptions + 1;
+    }
+
+    const visibleOptions = options.slice(windowStart, windowStart + maxVisibleOptions);
+    const hasHiddenAbove = windowStart > 0;
+    const hasHiddenBelow = windowStart + maxVisibleOptions < options.length;
     const lines = [
       chalk.bold.white(`  ${title}`),
-      chalk.dim('  Use the arrow keys, then press Enter.'),
+      chalk.dim(`  ${helperText}`),
       '',
-      ...options.map((option, index) => {
-        const marker = index === activeIndex ? chalk.cyan('>') : ' ';
-        const text = index === activeIndex ? chalk.white(option.label) : chalk.dim(option.label);
+      topIndicator(hasHiddenAbove),
+      ...visibleOptions.map((option, visibleIndex) => {
+        const index = windowStart + visibleIndex;
+        const isActive = index === activeIndex;
+        const marker = isActive ? chalk.cyanBright('●') : chalk.dim('·');
+        const text = isActive ? chalk.cyanBright(option.label) : chalk.dim(option.label);
         return `  ${marker} ${text}`;
       }),
+      bottomIndicator(hasHiddenBelow),
       '',
     ];
 
-    stdout.write(lines.join('\n'));
+    writeLines(lines);
     renderedLineCount = lines.length;
   };
 
-  return await new Promise<string>((resolve) => {
+  return await new Promise<string>((resolve, reject) => {
     const cleanup = () => {
       stdin.off('keypress', onKeypress);
+      config.signal?.removeEventListener('abort', onAbort);
       if (canUseRawMode) {
         stdin.setRawMode(false);
       }
+    };
+
+    const onAbort = () => {
+      cleanup();
+      reject(new ArrowSelectCancelledError());
     };
 
     const onKeypress = (_input: string, key: readline.Key) => {
@@ -84,6 +143,13 @@ export async function selectWithArrowKeys(
     }
     stdin.resume();
     stdin.on('keypress', onKeypress);
+    config.signal?.addEventListener('abort', onAbort, { once: true });
+
+    if (config.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
     render();
   });
 }

@@ -6,13 +6,19 @@ import type { ChannelMessage } from '../types/channel.js';
 import { BaseChannel } from './base.js';
 import { logger } from '../utils/logger.js';
 import { renderMarkdown } from '../utils/markdown.js';
-import { selectWithArrowKeys, type ArrowSelectOption } from '../utils/arrow-select.js';
+import {
+  ArrowSelectCancelledError,
+  selectWithArrowKeys,
+  type ArrowSelectOption,
+} from '../utils/arrow-select.js';
 
 export class CLIChannel extends BaseChannel {
   readonly type = 'cli' as const;
   private rl: readline.Interface | null = null;
   private agentName: string;
   private menuDepth = 0;
+  private menuAbortController: AbortController | null = null;
+  private outputInProgress = 0;
 
   constructor(agentName: string = 'Mercury') {
     super();
@@ -63,6 +69,8 @@ export class CLIChannel extends BaseChannel {
   }
 
   async send(content: string, _targetId?: string, elapsedMs?: number): Promise<void> {
+    this.closeActiveMenu();
+    this.beginOutput();
     const timeStr = elapsedMs != null ? chalk.dim(` (${(elapsedMs / 1000).toFixed(1)}s)`) : '';
     const rendered = renderMarkdown(content);
     console.log('');
@@ -73,15 +81,16 @@ export class CLIChannel extends BaseChannel {
       .join('\n');
     console.log(indented);
     console.log('');
-    if (this.menuDepth === 0) {
-      this.showPrompt();
-    }
+    this.endOutput();
   }
 
   async sendFile(filePath: string, _targetId?: string): Promise<void> {
+    this.closeActiveMenu();
+    this.beginOutput();
     const resolved = path.resolve(filePath);
     if (!fs.existsSync(resolved)) {
       console.log(chalk.red(`  File not found: ${filePath}`));
+      this.endOutput();
       return;
     }
     const stat = fs.statSync(resolved);
@@ -95,12 +104,12 @@ export class CLIChannel extends BaseChannel {
     console.log(chalk.dim(`  path: ${resolved}`));
     console.log(chalk.dim(`  size: ${sizeStr}`));
     console.log('');
-    if (this.menuDepth === 0) {
-      this.showPrompt();
-    }
+    this.endOutput();
   }
 
   async stream(content: AsyncIterable<string>, _targetId?: string): Promise<string> {
+    this.closeActiveMenu();
+    this.beginOutput();
     console.log('');
     process.stdout.write(chalk.cyan(`  ${this.agentName}: `));
     let full = '';
@@ -109,9 +118,7 @@ export class CLIChannel extends BaseChannel {
       full += chunk;
     }
     console.log('\n');
-    if (this.menuDepth === 0) {
-      this.showPrompt();
-    }
+    this.endOutput();
     return full;
   }
 
@@ -126,18 +133,48 @@ export class CLIChannel extends BaseChannel {
     }
   }
 
-  async withMenu<T>(runner: (select: (title: string, options: ArrowSelectOption[]) => Promise<string>) => Promise<T>): Promise<T> {
+  async withMenu<T>(runner: (select: (title: string, options: ArrowSelectOption[]) => Promise<string>) => Promise<T>): Promise<T | undefined> {
     this.menuDepth += 1;
+    this.menuAbortController = new AbortController();
     this.suspendPrompt();
 
     try {
-      return await runner((title, options) => selectWithArrowKeys(title, options));
+      return await runner((title, options) => selectWithArrowKeys(title, options, {
+        signal: this.menuAbortController?.signal,
+      }));
+    } catch (error) {
+      if (error instanceof ArrowSelectCancelledError) {
+        return undefined;
+      }
+      throw error;
     } finally {
       this.menuDepth = Math.max(0, this.menuDepth - 1);
       if (this.menuDepth === 0) {
-        this.resumePrompt();
-        this.showPrompt();
+        this.menuAbortController = null;
       }
+      if (this.menuDepth === 0) {
+        this.resumePrompt();
+        if (this.outputInProgress === 0) {
+          this.showPrompt();
+        }
+      }
+    }
+  }
+
+  private closeActiveMenu(): void {
+    if (!this.menuAbortController?.signal.aborted) {
+      this.menuAbortController?.abort();
+    }
+  }
+
+  private beginOutput(): void {
+    this.outputInProgress += 1;
+  }
+
+  private endOutput(): void {
+    this.outputInProgress = Math.max(0, this.outputInProgress - 1);
+    if (this.menuDepth === 0 && this.outputInProgress === 0) {
+      this.showPrompt();
     }
   }
 
