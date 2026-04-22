@@ -408,6 +408,39 @@ export class TelegramChannel extends BaseChannel {
     });
   }
 
+  async askToContinue(question: string, targetId?: string): Promise<boolean> {
+    const chatIds = this.resolveTargetChatIds(targetId);
+    const chatId = chatIds[0];
+    if (!chatId || !this.bot) return false;
+
+    const id = `loop_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const keyboard = new InlineKeyboard()
+      .text('Continue', `${id}:yes`)
+      .text('Stop', `${id}:no`);
+
+    try {
+      await this.bot.api.sendMessage(chatId, mdToTelegram(question), {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch {
+      await this.bot.api.sendMessage(chatId, question, {
+        reply_markup: keyboard,
+      });
+    }
+
+    return new Promise((resolve) => {
+      this.pendingApprovals.set(`${id}:yes`, () => resolve(true));
+      this.pendingApprovals.set(`${id}:no`, () => resolve(false));
+
+      setTimeout(() => {
+        this.pendingApprovals.delete(`${id}:yes`);
+        this.pendingApprovals.delete(`${id}:no`);
+        resolve(false);
+      }, 120_000);
+    });
+  }
+
   private async handleAccessRequest(
     userId: number,
     chatId: number,

@@ -30,8 +30,8 @@ import {
 
 class ToolCallLoopDetector {
   private recentCalls: Array<{ tool: string; params: string }> = [];
-  private maxEntries = 16;
-  private aborted = false;
+  private maxEntries = 20;
+  private hardAborted = false;
 
   private static readonly HIGH_TOLERANCE_TOOLS = new Set([
     'fetch_url',
@@ -39,10 +39,15 @@ class ToolCallLoopDetector {
     'list_dir',
     'web_search',
     'github_api',
+    'run_command',
   ]);
 
+  private static getIdenticalThreshold(): number {
+    return 3;
+  }
+
   private static getSameToolThreshold(toolName: string): number {
-    return ToolCallLoopDetector.HIGH_TOLERANCE_TOOLS.has(toolName) ? 6 : 3;
+    return ToolCallLoopDetector.HIGH_TOLERANCE_TOOLS.has(toolName) ? 6 : 4;
   }
 
   record(toolName: string, params: Record<string, any>): void {
@@ -53,7 +58,7 @@ class ToolCallLoopDetector {
     }
   }
 
-  detect(): { tool: string; count: number; message: string } | null {
+  detectIdentical(): { tool: string; count: number; message: string } | null {
     if (this.recentCalls.length < 3) return null;
 
     const last = this.recentCalls[this.recentCalls.length - 1];
@@ -67,45 +72,50 @@ class ToolCallLoopDetector {
       }
     }
 
-    if (identicalCount >= 3) {
-      this.aborted = true;
+    if (identicalCount >= ToolCallLoopDetector.getIdenticalThreshold()) {
+      this.hardAborted = true;
       return {
         tool: last.tool,
         count: identicalCount,
-        message: `You called "${last.tool}" ${identicalCount} times with the same parameters and got the same result. This is a loop — stop repeating this call entirely.`,
-      };
-    }
-
-    const lastTool = last.tool;
-    let sameToolCount = 0;
-    for (let i = this.recentCalls.length - 1; i >= 0; i--) {
-      if (this.recentCalls[i].tool === lastTool) {
-        sameToolCount++;
-      } else {
-        break;
-      }
-    }
-
-    const threshold = ToolCallLoopDetector.getSameToolThreshold(lastTool);
-    if (sameToolCount >= threshold) {
-      this.aborted = true;
-      return {
-        tool: lastTool,
-        count: sameToolCount,
-        message: `You called "${lastTool}" ${sameToolCount} times in a row with different parameters and it isn't producing useful progress. Stop — the approach is wrong. Step back, tell the user what you tried, what failed, and suggest alternatives.`,
+        message: `[SYSTEM] You called "${last.tool}" ${identicalCount} times with identical parameters and got the same result. This is a hard loop — stop immediately.`,
       };
     }
 
     return null;
   }
 
-  isAborted(): boolean {
-    return this.aborted;
+  detectSameTool(): { tool: string; count: number } | null {
+    if (this.recentCalls.length < 4) return null;
+
+    const last = this.recentCalls[this.recentCalls.length - 1];
+
+    let sameToolCount = 0;
+    for (let i = this.recentCalls.length - 1; i >= 0; i--) {
+      if (this.recentCalls[i].tool === last.tool) {
+        sameToolCount++;
+      } else {
+        break;
+      }
+    }
+
+    const threshold = ToolCallLoopDetector.getSameToolThreshold(last.tool);
+    if (sameToolCount >= threshold) {
+      return {
+        tool: last.tool,
+        count: sameToolCount,
+      };
+    }
+
+    return null;
+  }
+
+  isHardAborted(): boolean {
+    return this.hardAborted;
   }
 
   reset(): void {
     this.recentCalls = [];
-    this.aborted = false;
+    this.hardAborted = false;
   }
 }
 
@@ -285,32 +295,6 @@ export class Agent {
 
       const messages: any[] = [];
 
-      const recentSteps = this.shortTerm.getRecent(msg.channelId, 4);
-      let loopWarning: string | null = null;
-      if (recentSteps.length >= 3) {
-        const toolCallPattern = /\[Using: (.+?)\]/g;
-        const toolCalls: string[] = [];
-        for (const m of recentSteps) {
-          if (m.role === 'assistant') {
-            let match;
-            while ((match = toolCallPattern.exec(m.content)) !== null) {
-              toolCalls.push(match[1]);
-            }
-          }
-        }
-        if (toolCalls.length >= 3) {
-          const last3 = toolCalls.slice(-3);
-          if (last3[0] === last3[1] && last3[1] === last3[2]) {
-            loopWarning = `[SYSTEM WARNING] In previous turns you called ${last3[0]} repeatedly. Do NOT call it again. If something failed, explain the failure to the user and suggest alternatives.`;
-          }
-        }
-      }
-
-      if (loopWarning) {
-        messages.push({ role: 'user', content: loopWarning });
-        messages.push({ role: 'assistant', content: 'Understood. I will try a different approach.' });
-      }
-
       if (relevantFacts.length > 0) {
         messages.push({
           role: 'user',
@@ -370,14 +354,31 @@ export class Agent {
                   for (const tc of toolCalls) {
                     loopDetector.record(tc.toolName, tc.args as Record<string, any>);
                   }
-                  const loop = loopDetector.detect();
-                  if (loop) {
-                    logger.warn({ tool: loop.tool, count: loop.count }, 'Tool call loop detected — aborting generation');
+                  if (toolCalls.some((tc: any) => tc.toolName === 'use_skill')) {
+                    loopDetector.reset();
+                  }
+                  const hardLoop = loopDetector.detectIdentical();
+                  if (hardLoop) {
+                    logger.warn({ tool: hardLoop.tool, count: hardLoop.count }, 'Hard loop detected — aborting');
                     if (!loopWarningSent && channel && msg.channelType !== 'internal') {
                       loopWarningSent = true;
-                      await channel.send(`⚠ Loop detected — ${loop.tool} called ${loop.count}x in a row. Stopping to save tokens.`, msg.channelId).catch(() => {});
+                      await channel.send(`⚠ Repeated call detected — ${hardLoop.tool} called ${hardLoop.count}x with same params. Stopping.`, msg.channelId).catch(() => {});
                     }
                     loopAbortController.abort();
+                  }
+                  const softLoop = loopDetector.detectSameTool();
+                  if (softLoop && !loopWarningSent && channel && msg.channelType !== 'internal') {
+                    loopWarningSent = true;
+                    const shouldContinue = await channel.askToContinue(
+                      `${softLoop.tool} has been called ${softLoop.count}x in a row. This might be a loop.`,
+                      msg.channelId,
+                    ).catch(() => false);
+                    if (shouldContinue) {
+                      loopDetector.reset();
+                      loopWarningSent = false;
+                    } else {
+                      loopAbortController.abort();
+                    }
                   }
                   if (channel && msg.channelType !== 'internal') {
                     if (channel instanceof CLIChannel) {
@@ -433,14 +434,31 @@ export class Agent {
                   for (const tc of toolCalls) {
                     loopDetector.record(tc.toolName, tc.args as Record<string, any>);
                   }
-                  const loop = loopDetector.detect();
-                  if (loop) {
-                    logger.warn({ tool: loop.tool, count: loop.count }, 'Tool call loop detected — aborting generation');
+                  if (toolCalls.some((tc: any) => tc.toolName === 'use_skill')) {
+                    loopDetector.reset();
+                  }
+                  const hardLoop = loopDetector.detectIdentical();
+                  if (hardLoop) {
+                    logger.warn({ tool: hardLoop.tool, count: hardLoop.count }, 'Hard loop detected — aborting');
                     if (!loopWarningSent && channel && msg.channelType !== 'internal') {
                       loopWarningSent = true;
-                      await channel.send(`⚠ Loop detected — ${loop.tool} called ${loop.count}x in a row. Stopping to save tokens.`, msg.channelId).catch(() => {});
+                      await channel.send(`⚠ Repeated call detected — ${hardLoop.tool} called ${hardLoop.count}x with same params. Stopping.`, msg.channelId).catch(() => {});
                     }
                     loopAbortController.abort();
+                  }
+                  const softLoop = loopDetector.detectSameTool();
+                  if (softLoop && !loopWarningSent && channel && msg.channelType !== 'internal') {
+                    loopWarningSent = true;
+                    const shouldContinue = await channel.askToContinue(
+                      `${softLoop.tool} has been called ${softLoop.count}x in a row. This might be a loop.`,
+                      msg.channelId,
+                    ).catch(() => false);
+                    if (shouldContinue) {
+                      loopDetector.reset();
+                      loopWarningSent = false;
+                    } else {
+                      loopAbortController.abort();
+                    }
                   }
                   if (channel && msg.channelType !== 'internal') {
                     if (channel instanceof CLIChannel) {
@@ -460,10 +478,13 @@ export class Agent {
           this.providers.markSuccess(provider.name);
           break;
         } catch (err: any) {
-          if (loopDetector.isAborted()) {
+          if (loopDetector.isHardAborted() || loopAbortController.signal.aborted) {
             logger.info('Generation aborted due to loop detection — using partial response');
             if (!result && streamedText) {
               result = { text: streamedText, usage: undefined };
+            }
+            if (!result) {
+              result = { text: 'I stopped because I was repeating the same tool calls. What would you like me to do differently?', usage: undefined };
             }
             if (usedProvider) {
               this.providers.markSuccess(usedProvider.name);

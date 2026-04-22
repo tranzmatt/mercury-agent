@@ -269,4 +269,15 @@ export class CLIChannel extends BaseChannel {
       });
     });
   }
+
+  async askToContinue(question: string, _targetId?: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      console.log('');
+      console.log(chalk.yellow(`  ⚠ ${question}`));
+      this.rl?.question(chalk.yellow('  Continue? [y/N] '), (answer) => {
+        const val = answer.trim().toLowerCase();
+        resolve(val === 'y' || val === 'yes');
+      });
+    });
+  }
 }
