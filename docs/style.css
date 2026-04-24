@@ -650,8 +650,8 @@ footer {
   content: '';
   position: absolute;
   left: 28px;
-  top: 32px;
-  bottom: 32px;
+  top: 28px;
+  bottom: 28px;
   width: 2px;
   background: linear-gradient(to bottom, var(--cyan), var(--cyan-dim), transparent);
   box-shadow: 0 0 8px var(--cyan-glow), 0 0 20px rgba(0, 212, 255, 0.15);
@@ -675,7 +675,7 @@ footer {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, rgba(0, 212, 255, 0.2), rgba(0, 212, 255, 0.05));
+  background: var(--bg);
   border: 2px solid var(--cyan);
   border-radius: 50%;
   font-family: var(--font);
@@ -684,23 +684,24 @@ footer {
   color: var(--cyan);
   position: relative;
   z-index: 1;
-  box-shadow: 0 0 12px var(--cyan-glow), 0 0 24px rgba(0, 212, 255, 0.2), inset 0 0 12px rgba(0, 212, 255, 0.1);
+  box-shadow: 0 0 12px var(--cyan-glow), 0 0 24px rgba(0, 212, 255, 0.2);
   animation: glow-pulse 2.5s ease-in-out infinite;
   transition: all 0.3s ease;
 }
 .brain-step:hover .brain-step-num {
-  background: linear-gradient(135deg, rgba(0, 212, 255, 0.4), rgba(0, 212, 255, 0.15));
-  box-shadow: 0 0 20px var(--cyan-glow), 0 0 40px rgba(0, 212, 255, 0.3), inset 0 0 16px rgba(0, 212, 255, 0.2);
+  background: var(--bg-card);
+  box-shadow: 0 0 20px var(--cyan-glow), 0 0 40px rgba(0, 212, 255, 0.3);
   transform: scale(1.08);
   color: var(--white);
+  border-color: var(--white);
 }
 .brain-step:nth-child(1) .brain-step-num { animation-delay: 0s; }
 .brain-step:nth-child(2) .brain-step-num { animation-delay: 0.4s; }
 .brain-step:nth-child(3) .brain-step-num { animation-delay: 0.8s; }
 .brain-step:nth-child(4) .brain-step-num { animation-delay: 1.2s; }
 @keyframes glow-pulse {
-  0%, 100% { box-shadow: 0 0 12px var(--cyan-glow), 0 0 24px rgba(0, 212, 255, 0.2), inset 0 0 12px rgba(0, 212, 255, 0.1); }
-  50% { box-shadow: 0 0 24px var(--cyan-glow), 0 0 48px rgba(0, 212, 255, 0.35), inset 0 0 20px rgba(0, 212, 255, 0.2); }
+  0%, 100% { box-shadow: 0 0 12px var(--cyan-glow), 0 0 24px rgba(0, 212, 255, 0.2); }
+  50% { box-shadow: 0 0 24px var(--cyan-glow), 0 0 48px rgba(0, 212, 255, 0.35); }
 }
 .brain-step-content {
   flex: 1;
@@ -722,5 +723,5 @@ footer {
 @media (max-width: 640px) {
   .brain-architecture { padding: 24px 16px; }
   .brain-step-num { width: 40px; height: 40px; font-size: 1em; }
-  .brain-flow::before { left: 20px; }
+  .brain-flow::before { left: 20px; top: 20px; bottom: 20px; }
 }
