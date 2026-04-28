@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.1.3 — Fix Ollama Cloud Provider
+
+### What Happened
+
+Ollama Cloud was completely broken — every request returned `404 Not Found`. Two independent bugs prevented `ollamaCloud` from functioning:
+
+### Bug 1: Wrong SDK — Local Ollama API instead of OpenAI-compatible Chat Completions
+
+`ollamaCloud` was routed through `OllamaProvider`, which uses the `ollama-ai-provider` package. This package is designed for **local** Ollama servers and targets `/api/chat` and `/api/tags` endpoints. Ollama Cloud exposes an **OpenAI-compatible** API at `/v1/chat/completions` and `/v1/models` — a completely different wire format.
+
+- **Model listing** called `${baseUrl}/tags` → `https://ollama.com/api/tags` → 404
+- **Chat completions** called `${baseUrl}/chat` → `https://ollama.com/api/chat` → 404
+
+**Fix**: `ollamaCloud` is now routed through `OpenAICompatProvider` (using `createOpenAI()` from `@ai-sdk/openai`), matching the pattern used by all other OpenAI-compatible cloud providers (MiMo, Grok).
+
+### Bug 2: Wrong default base URL
+
+The default `OLLAMA_CLOUD_BASE_URL` was set to `https://ollama.com/api` — the local Ollama server path. The correct base URL for Ollama Cloud's OpenAI-compatible API is `https://ollama.com/v1`.
+
+**Fix**: Updated the default and added a config migration (`migrateLegacyOllamaCloudBaseUrl`) that automatically upgrades existing `mercury.yaml` files from `/api` to `/v1` on startup.
+
+### Bug 3: Responses API instead of Chat Completions API
+
+After fixing Bug 1, `OpenAICompatProvider` used `createOpenAI()()` which defaults to OpenAI's **Responses API** (`/responses`). Ollama Cloud only supports the **Chat Completions** API (`/chat/completions`), resulting in `https://ollama.com/api/responses` → 404.
+
+**Fix**: Added `useChatApi` option to `OpenAICompatProvider`. When enabled (as it is for `ollamaCloud`), it calls `client.chat(model)` instead of `client(model)`, targeting `/chat/completions`.
+
+### Bug 4: No baseUrl validation for ollamaCloud
+
+`isProviderConfigured()` and `OllamaProvider.isAvailable()` only checked `apiKey.length > 0` for `ollamaCloud` — a missing or empty `baseUrl` would not be caught, causing a cryptic failure at request time.
+
+**Fix**: Added explicit `ollamaCloud` branch in `isProviderConfigured()` and `isAvailable()` to validate both `apiKey` and `baseUrl`.
+
+### Summary of Changes
+
+| File | Change |
+|------|--------|
+| `src/providers/registry.ts` | Route `ollamaCloud` → `OpenAICompatProvider` with `useChatApi: true` |
+| `src/providers/openai-compat.ts` | Add `useChatApi` option to use Chat Completions API |
+| `src/utils/config.ts` | Default base URL `https://ollama.com/api` → `https://ollama.com/v1`; add `ollamaCloud` to `isProviderConfigured()`; add `migrateLegacyOllamaCloudBaseUrl()` |
+| `src/utils/provider-models.ts` | New `fetchOllamaCloudModels()` using `/models` (OpenAI-compatible); rename `fetchOllamaModels` → `fetchOllamaLocalModels` (local `/tags` only); route `ollamaCloud` separately |
+| `src/providers/ollama.ts` | `isAvailable()` also validates `baseUrl` for non-local providers |
+| `.env.example` | `OLLAMA_CLOUD_BASE_URL` default updated to `https://ollama.com/v1` |
+| `src/utils/provider-models.test.ts` | Added 2 tests for `ollamaCloud` model catalog |
+
+## 1.1.2 — MiMo Provider & Budget Hardening
+
 ## 1.0.0 — Second Brain
 
 This is a **major release** because it introduces the Second Brain — a persistent, structured memory system backed by SQLite with full-text search — alongside fundamental changes to how Mercury stores data and renders output.
