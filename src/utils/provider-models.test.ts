@@ -96,4 +96,24 @@ describe('buildModelCatalog', () => {
 
     expect(catalog.recommendedModel).toBe('other-model:8b');
   });
+
+  it('uses the first model as recommended for OpenAI Compilations when no preferred list exists', () => {
+    const catalog = buildModelCatalog('openaiCompat', [
+      'my-custom-model',
+      'another-model',
+    ]);
+
+    expect(catalog.recommendedModel).toBe('my-custom-model');
+    expect(catalog.models).toContain('another-model');
+  });
+
+  it('falls back to the current model for OpenAI Compilations', () => {
+    const catalog = buildModelCatalog(
+      'openaiCompat',
+      ['model-a', 'model-b'],
+      'model-a',
+    );
+
+    expect(catalog.recommendedModel).toBe('model-a');
+  });
 });

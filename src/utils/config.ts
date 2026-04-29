@@ -53,6 +53,7 @@ export type ProviderName =
   | 'grok'
   | 'ollamaCloud'
   | 'ollamaLocal'
+  | 'openaiCompat'
   | 'mimo'
   | 'mimoTokenPlan';
 
@@ -70,6 +71,7 @@ export interface MercuryConfig {
     grok: ProviderConfig;
     ollamaCloud: ProviderConfig;
     ollamaLocal: ProviderConfig;
+    openaiCompat: ProviderConfig;
     mimo: ProviderConfig;
     mimoTokenPlan: ProviderConfig;
   };
@@ -176,6 +178,13 @@ export function getDefaultConfig(): MercuryConfig {
         baseUrl: getEnv('OLLAMA_LOCAL_BASE_URL', 'http://127.0.0.1:11434/api'),
         model: getEnv('OLLAMA_LOCAL_MODEL', 'gpt-oss:20b'),
         enabled: getEnvBool('OLLAMA_LOCAL_ENABLED', false),
+      },
+      openaiCompat: {
+        name: 'openaiCompat',
+        apiKey: getEnv('OPENAI_COMPAT_API_KEY', ''),
+        baseUrl: getEnv('OPENAI_COMPAT_BASE_URL', ''),
+        model: getEnv('OPENAI_COMPAT_MODEL', ''),
+        enabled: getEnvBool('OPENAI_COMPAT_ENABLED', false),
       },
       mimo: {
         name: 'mimo',
@@ -299,6 +308,9 @@ export function isProviderConfigured(provider: ProviderConfig): boolean {
   }
   if (provider.name === 'ollamaCloud') {
     return provider.apiKey.length > 0 && provider.baseUrl.length > 0;
+  }
+  if (provider.name === 'openaiCompat') {
+    return provider.baseUrl.length > 0 && provider.model.length > 0;
   }
   return provider.apiKey.length > 0;
 }

@@ -23,6 +23,7 @@ export class ProviderRegistry {
       config.providers.grok,
       config.providers.ollamaCloud,
       config.providers.ollamaLocal,
+      config.providers.openaiCompat,
       config.providers.mimo,
       config.providers.mimoTokenPlan,
     ];
@@ -38,6 +39,8 @@ export class ProviderRegistry {
         } else if (pc.name === 'ollamaLocal') {
           provider = new OllamaProvider(pc);
         } else if (pc.name === 'ollamaCloud') {
+          provider = new OpenAICompatProvider(pc, { useChatApi: true });
+        } else if (pc.name === 'openaiCompat') {
           provider = new OpenAICompatProvider(pc, { useChatApi: true });
         } else if (pc.name === 'mimo' || pc.name === 'mimoTokenPlan') {
           provider = new MiMoProvider(pc);

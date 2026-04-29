@@ -109,6 +109,7 @@ const PROVIDER_OPTIONS: Array<{ key: ProviderName; label: string }> = [
   { key: 'grok', label: 'Grok (xAI)' },
   { key: 'ollamaCloud', label: 'Ollama Cloud' },
   { key: 'ollamaLocal', label: 'Ollama Local' },
+  { key: 'openaiCompat', label: 'OpenAI Compilations' },
   { key: 'mimo', label: 'MiMo (Xiaomi)' },
   { key: 'mimoTokenPlan', label: 'MiMo Token Plan (Xiaomi)' },
 ];
@@ -409,6 +410,46 @@ async function promptOllamaLocalModelSelection(config: MercuryConfig): Promise<{
   }
 }
 
+async function promptOpenAICompatSetup(config: MercuryConfig, isReconfig: boolean): Promise<{ baseUrl?: string; apiKey?: string; model?: string; skipped: boolean }> {
+  const existingConfig = config.providers.openaiCompat;
+
+  const baseUrl = (await promptValidatedValue(
+    chalk.white(`  Server base URL${isReconfig && existingConfig.baseUrl ? ` [${existingConfig.baseUrl}]` : ''}: `),
+    validateBaseUrl,
+    existingConfig.baseUrl,
+  ))!;
+  if (!baseUrl) return { skipped: true };
+
+  const apiKeyPrompt = isReconfig && existingConfig.apiKey
+    ? chalk.white(`  API key (optional, press Enter to keep current) [${maskKey(existingConfig.apiKey)}]: `)
+    : chalk.white('  API key (optional, press Enter to skip): ');
+  const apiKey = await ask(apiKeyPrompt);
+  const resolvedApiKey = apiKey || existingConfig.apiKey || '';
+
+  console.log(chalk.dim('  Fetching models from server...'));
+  try {
+    const catalog = await fetchProviderModelCatalog('openaiCompat', {
+      ...existingConfig,
+      baseUrl,
+      apiKey: resolvedApiKey,
+    });
+    const model = await chooseProviderModel(
+      'OpenAI Compilations',
+      catalog.recommendedModel,
+      catalog.models,
+    );
+    return { baseUrl, apiKey: resolvedApiKey, model, skipped: false };
+  } catch {
+    console.log(chalk.yellow('  Could not fetch models from this server. You can enter the model name manually.'));
+    const model = (await promptValidatedValue(
+      chalk.white('  Model name: '),
+      validateModelName,
+    ))!;
+    if (!model) return { baseUrl, apiKey: resolvedApiKey, model: existingConfig.model, skipped: false };
+    return { baseUrl, apiKey: resolvedApiKey, model, skipped: false };
+  }
+}
+
 async function promptValidatedValue(
   prompt: string,
   validator: (value: string) => string | null,
@@ -679,6 +720,19 @@ async function configure(existingConfig?: MercuryConfig): Promise<void> {
           config.providers.ollamaLocal.baseUrl = result.baseUrl;
           config.providers.ollamaLocal.model = result.model;
           config.providers.ollamaLocal.enabled = true;
+        }
+        continue;
+      }
+
+      if (provider === 'openaiCompat') {
+        const result = await promptOpenAICompatSetup(config, isReconfig);
+        if (!result.skipped && result.baseUrl && result.model) {
+          config.providers.openaiCompat.baseUrl = result.baseUrl;
+          config.providers.openaiCompat.model = result.model;
+          config.providers.openaiCompat.enabled = true;
+          if (result.apiKey) {
+            config.providers.openaiCompat.apiKey = result.apiKey;
+          }
         }
         continue;
       }

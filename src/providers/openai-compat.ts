@@ -17,7 +17,7 @@ export class OpenAICompatProvider extends BaseProvider {
     this.model = config.model;
 
     this.client = createOpenAI({
-      apiKey: config.apiKey,
+      apiKey: config.apiKey || 'no-key',
       baseURL: config.baseUrl,
     });
     this.modelInstance = useChatApi
