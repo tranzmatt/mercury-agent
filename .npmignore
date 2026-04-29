@@ -1,5 +1,6 @@
 src/
 docs/
+website/
 scripts/
 *.ts
 !dist/*.ts
