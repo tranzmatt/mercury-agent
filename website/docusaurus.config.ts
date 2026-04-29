@@ -28,6 +28,7 @@ const config: Config = {
 
   scripts: [
     { src: 'https://analytics.cosmicstack.org/js/pa--flkUFvdfmsPSUtRivKAK.js', async: true },
+    { src: '/js/plausible-init.js' },
   ],
 
   themes: [
