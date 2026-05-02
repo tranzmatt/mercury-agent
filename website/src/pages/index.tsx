@@ -222,7 +222,7 @@ export default function LandingPage(): React.ReactElement {
     <>
       <Head>
         <title>Mercury — Soul-Driven AI Agent with Permission Guardrails | Cosmic Stack</title>
-        <meta name="description" content="The AI agent that asks before it acts. Permission guardrails, token efficiency, full control, and GitHub companion. Runs 24/7 from CLI or Telegram with multi-provider onboarding, model selection, skills, and scheduling." />
+        <meta name="description" content="The AI agent that asks before it acts. Permission guardrails, token efficiency, sub-agent orchestration, Spotify integration, and full control. Runs 24/7 from CLI or Telegram with multi-provider onboarding, skills, and scheduling." />
         <meta property="og:title" content="Mercury — Soul-Driven AI Agent with Permission Guardrails" />
         <meta property="og:description" content="The AI agent that asks before it acts. Permission guardrails, token efficiency, and full control. Runs 24/7 from CLI or Telegram." />
         <meta property="og:type" content="website" />
@@ -266,7 +266,7 @@ export default function LandingPage(): React.ReactElement {
 /_/  /_/_____/_/ |_|\\____/\\____/_/ |_| /_/`}</pre>
             <p className="lp-hero-tagline">Soul-driven. Token-efficient. Always on.</p>
             <p className="lp-hero-sub">
-              Your personal AI agent with 31 built-in tools, skill system, multi-channel access, GitHub companion, and
+              Your personal AI agent with 31 built-in tools, skill system, multi-agent orchestration, Spotify integration, GitHub companion, and
               hardened permissions. Runs 24/7 from your terminal or Telegram.
             </p>
             <div className="lp-hero-actions">
@@ -298,6 +298,8 @@ export default function LandingPage(): React.ReactElement {
                 { icon: '⚡', title: 'Token-Efficient', desc: 'Daily token budgets with enforcement. Only soul + persona injected per request (~400 tokens). Progressive skill loading. Auto-concise when budget exceeds 70%.' },
                 { icon: '♾', title: 'Always On', desc: 'Background daemon by default. Cron scheduling, delayed tasks, and a heartbeat system. Auto-starts on boot, auto-restarts on crash.' },
                 { icon: '📡', title: 'Multi-Channel', desc: 'CLI with readline and arrow-key menus. Telegram with typing indicators, HTML formatting, file uploads, and private 1:1 access.' },
+                { icon: '🤖', title: 'Sub-Agents', desc: 'Spawn parallel AI agents for concurrent tasks. Mercury orchestrates — research, code, and review run simultaneously. Non-blocking: keep chatting while agents work.' },
+                { icon: '🎵', title: 'Spotify Integration', desc: 'Native Spotify control through conversation. Play music, manage playlists, DJ on your devices. Search, like, queue — all through natural language.' },
                 { icon: '🧩', title: 'Skill System', desc: 'Install community skills with a single command. Skills auto-load into context, get elevated permissions, and can be scheduled as recurring tasks.' },
                 { icon: '🛡', title: 'Permission Hardened', desc: 'Folder-level read/write scoping. Command blocklist. Pending approval flow. Ask Me or Allow All mode per session.' },
               ].map((f, i) => (
@@ -379,8 +381,9 @@ export default function LandingPage(): React.ReactElement {
                 { title: '💬 Messaging', items: ['send_message — Send a message to approved Telegram recipients'] },
                 { title: '🐚 Shell', items: ['run_command — Execute shell commands', 'cd — Change working directory', 'approve_command — Permanently approve a command'] },
                 { title: '📦 Git', items: ['git_status — Working tree status', 'git_diff — Show file changes', 'git_log — Commit history', 'git_add — Stage files', 'git_commit — Create commits', 'git_push — Push to remote'] },
-                { title: '🌐 Web', items: ['fetch_url — Fetch & strip HTML to text'] },
                 { title: '🐙 GitHub', items: ['create_pr — Create pull requests', 'review_pr — Review PRs + post comments', 'list_issues — List & filter issues', 'create_issue — Create new issues', 'github_api — Raw API access', 'Co-authored-by on every commit'] },
+                { title: '🎵 Spotify', items: ['spotify_search — Search tracks, artists, albums, playlists', 'spotify_play — Play on your devices', 'spotify_pause/next/previous — Playback controls', 'spotify_now_playing — What\'s playing + progress bar', 'spotify_devices — List & select devices', 'spotify_like/top_tracks/playlists — Library access', 'spotify_volume/shuffle/repeat/queue — Full player control'] },
+                { title: '🤖 Sub-Agents', items: ['delegate_task — Spawn parallel AI agents', 'list_agents — Monitor running agents', 'stop_agent — Halt a specific agent', '/agents — See all agents + status', '/halt — Emergency stop all agents', 'File locks for concurrent safety', 'Auto-concurrency from CPU/RAM'] },
                 { title: '🧩 Skills', items: ['install_skill — Install from URL or content', 'list_skills — Show installed skills', 'use_skill — Invoke a skill'] },
                 { title: '⏰ Scheduler', items: ['schedule_task — Cron or one-shot tasks', 'list_scheduled_tasks — View all tasks', 'cancel_scheduled_task — Cancel a task'] },
                 { title: '📊 System', items: ['budget_status — Check token budget'] },
@@ -409,6 +412,8 @@ export default function LandingPage(): React.ReactElement {
                     ['Soul / Persona System', '4 markdown files', 'Custom instructions', 'CLAUDE.md'],
                     ['Token Budget', 'Daily budget + override', '—', '—'],
                     ['Multi-Channel', 'CLI + Telegram + more', 'All', 'All'],
+                    ['Sub-Agents', 'Parallel AI workers, non-blocking', '—', '—'],
+                    ['Spotify Integration', 'Native playback + DJ mode', '—', '—'],
                     ['Skill System', 'Install, invoke, schedule', '—', '—'],
                     ['Cron + Delayed Scheduling', 'Persisted, auto-restore', '—', '—'],
                     ['Permission Hardening', 'Blocklist + scope + approval', 'Confirmation prompts', 'Permission prompts'],
@@ -443,6 +448,8 @@ export default function LandingPage(): React.ReactElement {
               {[
                 { label: 'Core', value: 'TypeScript + Node.js 18+', desc: 'ESM, tsup build, SQLite-backed second brain' },
                 { label: 'AI SDK', value: 'Vercel AI SDK v4', desc: 'streamText + generateText, 10-step agentic loop' },
+                { label: 'Sub-Agents', value: 'Same-process async coroutines', desc: 'Parallel task delegation, file locks, resource-aware concurrency' },
+                { label: 'Spotify', value: 'Native Web API integration', desc: 'OAuth2 auth, 14 tools, DJ mode skill, Premium + free support' },
                 { label: 'Providers', value: 'DeepSeek · OpenAI · Anthropic · Grok · Ollama Cloud · Ollama Local', desc: 'Validated onboarding, model discovery, and fallback with last-successful tracking' },
                 { label: 'Memory', value: 'JSONL + SQLite', desc: 'Short-term, long-term, episodic + second brain' },
                 { label: 'Telegram', value: 'grammY', desc: 'Long polling, pairing codes, CLI-managed access requests, broadcasts, file uploads' },

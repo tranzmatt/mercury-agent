@@ -320,16 +320,21 @@ Mercury supports sub-agents — independent worker processes that run in the sam
 - **Resource-aware**: Max concurrent agents auto-detected from CPU cores and available RAM
 - **Coordinated**: File locks prevent conflicting writes between agents
 - **Controllable**: `/agents`, `/halt`, `/stop`, `/reset` commands for full user control
+- **Non-blocking**: Sub-agents run in background — the main agent stays responsive to new messages
+- **Visible**: Progress notifications (`🔄 Agent a1: Using: read_file`) and completion messages (`✅ Agent a1 completed (8.2s)`) are sent to the user's channel
+- **Fast-path commands**: Slash commands like `/agents`, `/halt`, `/spotify`, `/code` are processed immediately even while the main agent is busy
 
 ### Architecture
 
 ```
 User message → Main Agent → Decide:
   ├─ Quick response → Handle inline, respond directly
-  └─ Heavy task → delegate_task tool → Spawn Sub-Agent
-       → Main Agent responds: "Working on it. Agent a1 tasked."
+  └─ Heavy task → delegate_task tool → Spawn Sub-Agent (non-blocking)
+       → Main Agent responds: "🤖 Agent a1 is working on..."
        → Main Agent stays available for next message
-       → Sub-Agent completes → Main Agent notifies user
+       → Sub-Agent progress: "🔄 Agent a1: Using: read_file, edit_file"
+       → Sub-Agent completes: "✅ Agent a1 completed (8.2s): result..."
+       → User can type /agents to check status at any time
 ```
 
 ### Component Overview
