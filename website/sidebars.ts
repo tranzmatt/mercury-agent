@@ -10,7 +10,7 @@ const sidebars: SidebarsConfig = {
       label: 'CLI Commands',
       collapsed: false,
       items: [
-        'cli-commands/commands',
+        'cli-commands/cli-commands',
         'cli-commands/doctor',
         'cli-commands/in-chat-commands',
       ],
@@ -20,7 +20,7 @@ const sidebars: SidebarsConfig = {
       label: 'Daemon Mode',
       collapsed: true,
       items: [
-        'daemon-mode/background-mode',
+        'daemon-mode/daemon-mode',
         'daemon-mode/system-service',
         'daemon-mode/platform-guide',
       ],
