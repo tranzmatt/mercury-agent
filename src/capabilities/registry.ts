@@ -227,7 +227,7 @@ export class CapabilityRegistry {
     logger.info('Web fetch tool registered');
 
     if (this.supervisor) {
-      this.tools.delegate_task = createDelegateTaskTool(this.supervisor);
+      this.tools.delegate_task = createDelegateTaskTool(this.supervisor, this);
       this.tools.list_agents = createListAgentsTool(this.supervisor);
       this.tools.stop_agent = createStopAgentTool(this.supervisor);
       logger.info('Sub-agent tools registered');

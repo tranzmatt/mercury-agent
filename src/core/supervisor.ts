@@ -130,11 +130,11 @@ export class SubAgentSupervisor {
       sourceChannelType: config.sourceChannelType,
     });
 
-    await this.startAgent(fullConfig);
+    this.startAgentInBackground(fullConfig);
     return id;
   }
 
-  private async startAgent(config: SubAgentConfig): Promise<void> {
+  private startAgentInBackground(config: SubAgentConfig): void {
     const subAgent = new SubAgent(config, {
       agentConfig: this.agentConfig,
       providers: this.providers,
@@ -153,18 +153,20 @@ export class SubAgentSupervisor {
 
     subAgent.setProgressCallback((agentId, progress) => {
       this.taskBoard.update(agentId, { progress });
-    });
 
-    subAgent.setCompletionCallback(async (result: SubAgentResult) => {
-      await this.onAgentComplete(config.id, result);
+      const entry = this.taskBoard.get(agentId);
+      if (entry) {
+        const channelType = entry.sourceChannelType || 'cli';
+        const channelId = entry.sourceChannelId || 'cli';
+        this.notify(channelType, channelId, `🔄 Agent ${agentId}: ${progress}`).catch(() => {});
+      }
     });
 
     logger.info({ agentId: config.id, task: config.task.slice(0, 60) }, 'Starting sub-agent');
 
-    try {
-      const result = await subAgent.run();
+    subAgent.run().then(async (result) => {
       await this.onAgentComplete(config.id, result);
-    } catch (err) {
+    }).catch(async (err) => {
       logger.error({ agentId: config.id, err }, 'Sub-agent threw unexpected error');
       this.taskBoard.update(config.id, {
         status: 'failed',
@@ -172,7 +174,11 @@ export class SubAgentSupervisor {
         error: String(err),
         progress: 'Failed unexpectedly',
       });
-    }
+      this.activeAgents.delete(config.id);
+      this.fileLockManager.releaseAll(config.id);
+      this.pausedAgents.delete(config.id);
+      await this.processWaitQueue();
+    });
   }
 
   private async onAgentComplete(agentId: string, result: SubAgentResult): Promise<void> {
@@ -188,11 +194,13 @@ export class SubAgentSupervisor {
       const channelId = entry.sourceChannelId || 'cli';
 
       if (result.status === 'completed') {
-        await this.notify(channelType, channelId, `✅ Agent ${agentId} completed: "${entry.task.slice(0, 40)}"\n${result.output.slice(0, 200)}${result.output.length > 200 ? '...' : ''}`);
+        const duration = result.duration ? `${(result.duration / 1000).toFixed(1)}s` : 'unknown';
+        const output = result.output.length > 500 ? result.output.slice(0, 500) + '...' : result.output;
+        await this.notify(channelType, channelId, `✅ **Agent ${agentId}** completed (${duration}): "${entry.task.slice(0, 40)}"\n\n${output}\n\nType a message to continue.`);
       } else if (result.status === 'halted') {
-        await this.notify(channelType, channelId, `⛔ Agent ${agentId} halted: "${entry.task.slice(0, 40)}"`);
+        await this.notify(channelType, channelId, `⛔ **Agent ${agentId}** halted: "${entry.task.slice(0, 40)}"`);
       } else if (result.status === 'failed') {
-        await this.notify(channelType, channelId, `❌ Agent ${agentId} failed: "${entry.task.slice(0, 40)}"\nError: ${result.error || 'unknown'}`);
+        await this.notify(channelType, channelId, `❌ **Agent ${agentId}** failed: "${entry.task.slice(0, 40)}"\nError: ${result.error || 'unknown'}`);
       }
     }
 
@@ -206,7 +214,7 @@ export class SubAgentSupervisor {
 
       const nextConfig = this.waitQueue.shift()!;
       this.taskBoard.update(nextConfig.id, { status: 'running', progress: 'Starting...' });
-      await this.startAgent(nextConfig);
+      this.startAgentInBackground(nextConfig);
     }
   }
 

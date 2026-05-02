@@ -301,8 +301,118 @@ export class Agent {
 
   private enqueueMessage(msg: ChannelMessage): void {
     logger.info({ from: msg.channelType, content: msg.content.slice(0, 50) }, 'Message enqueued');
+
+    const trimmed = msg.content.trim();
+    if (this.processing && trimmed.startsWith('/')) {
+      this.handleFastPathCommand(msg).catch((err) => {
+        logger.error({ err, content: trimmed.slice(0, 50) }, 'Fast-path command failed');
+      });
+      return;
+    }
+
     this.messageQueue.push(msg);
     this.processQueue();
+  }
+
+  private async handleFastPathCommand(msg: ChannelMessage): Promise<void> {
+    const trimmed = msg.content.trim();
+    const channel = this.channels.getChannelForMessage(msg);
+    if (!channel) return;
+
+    const activeAgents = this.supervisor ? this.supervisor.getActiveAgents() : [];
+    const hasActiveAgents = activeAgents.length > 0;
+    const busyPrefix = hasActiveAgents ? '' : '';
+
+    if (trimmed === '/agents' || trimmed === '/status') {
+      if (this.supervisor) {
+        const agents = this.supervisor.getActiveAgents();
+        if (agents.length === 0) {
+          await channel.send('No active sub-agents.', msg.channelId);
+        } else {
+          let text = '**Sub-Agents:**\n\n';
+          for (const a of agents) {
+            const icon = a.status === 'running' ? '🔄' : a.status === 'pending' ? '⏳' : a.status === 'completed' ? '✅' : '❌';
+            text += `${icon} **${a.id}**: ${a.task.slice(0, 60)}${a.task.length > 60 ? '...' : ''} — ${a.status}${a.progress ? ` (${a.progress})` : ''}\n`;
+          }
+          await channel.send(text, msg.channelId);
+        }
+      } else {
+        await channel.send('Sub-agents not enabled.', msg.channelId);
+      }
+      return;
+    }
+
+    if (trimmed === '/halt' || trimmed === '/stop') {
+      if (this.supervisor) {
+        await this.supervisor.haltAll();
+        if (trimmed === '/stop') {
+          this.supervisor.clearTaskBoard();
+        }
+        await channel.send(trimmed === '/halt' ? 'All sub-agents halted.' : 'All agents stopped, locks released, task board cleared.', msg.channelId);
+      }
+      return;
+    }
+
+    if (trimmed === '/help') {
+      await channel.send('Agent is busy. Available: /agents, /halt, /stop, /spotify, /code, /memory', msg.channelId);
+      return;
+    }
+
+    if (trimmed.startsWith('/spotify')) {
+      await this.handleFastPathSpotify(trimmed, msg, channel);
+      return;
+    }
+
+    if (trimmed.startsWith('/code')) {
+      await this.handleFastPathCode(trimmed, msg, channel);
+      return;
+    }
+
+    if (trimmed === '/memory') {
+      await channel.send('Agent is busy. Memory management will be available after current task completes.', msg.channelId);
+      return;
+    }
+
+    if (hasActiveAgents) {
+      const agentList = activeAgents.map(a => `**${a.id}**: ${a.task.slice(0, 40)}`).join(', ');
+      await channel.send(`I'm busy working on sub-agent tasks (${agentList}). Your message has been queued — I'll respond once I'm free. Use /agents to check status.`, msg.channelId);
+    } else {
+      await channel.send("I'm busy processing. Your message has been queued — I'll respond once I'm free.", msg.channelId);
+    }
+
+    this.messageQueue.push(msg);
+  }
+
+  private async handleFastPathSpotify(trimmed: string, msg: ChannelMessage, channel: any): Promise<void> {
+    if (!this.spotifyClient) {
+      await channel.send('Spotify is not connected.', msg.channelId);
+      return;
+    }
+    const rawArgs = trimmed.slice('/spotify'.length).trim().toLowerCase();
+    if (!rawArgs || rawArgs === 'status') {
+      const auth = this.spotifyClient.isAuthenticated() ? 'Connected' : 'Not connected';
+      await channel.send(`Spotify: **${auth}**\nDevice: ${this.spotifyClient.getDeviceId() || 'none selected'}`, msg.channelId);
+      return;
+    }
+    if (rawArgs === 'now' || rawArgs === 'playing' || rawArgs === 'np') {
+      try {
+        const text = await this.spotifyClient.getNowPlayingText();
+        await channel.send(text, msg.channelId);
+      } catch (err: any) {
+        await channel.send(`Failed: ${err.message}`, msg.channelId);
+      }
+      return;
+    }
+    await channel.send('Agent is busy. Full Spotify controls will be available after current task completes.', msg.channelId);
+  }
+
+  private async handleFastPathCode(trimmed: string, msg: ChannelMessage, channel: any): Promise<void> {
+    const rawArgs = trimmed.slice('/code'.length).trim().toLowerCase();
+    if (rawArgs === 'status') {
+      await channel.send(this.programmingMode.getStatusText(), msg.channelId);
+      return;
+    }
+    await channel.send('Agent is busy. Programming mode changes will be available after current task completes.', msg.channelId);
   }
 
   private async processQueue(): Promise<void> {
@@ -354,6 +464,18 @@ export class Agent {
   private async handleMessage(msg: ChannelMessage): Promise<void> {
     this.lifecycle.transition('thinking');
     const startTime = Date.now();
+
+    if (this.supervisor && msg.channelType !== 'internal') {
+      const activeAgents = this.supervisor.getActiveAgents();
+      const runningAgents = activeAgents.filter(a => a.status === 'running');
+      if (runningAgents.length > 0) {
+        const channel = this.channels.getChannelForMessage(msg);
+        if (channel) {
+          const agentLines = runningAgents.map(a => `  🔄 ${a.id}: ${a.task.slice(0, 45)}${a.task.length > 45 ? '...' : ''}`);
+          await channel.send(`**Multi-agent mode** — ${runningAgents.length} agent${runningAgents.length > 1 ? 's' : ''} active:\n${agentLines.join('\n')}`, msg.channelId).catch(() => {});
+        }
+      }
+    }
 
       const isInternal = msg.channelType === 'internal';
       const isScheduled = msg.senderId === 'system' && msg.channelType !== 'internal';
