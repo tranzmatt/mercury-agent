@@ -391,7 +391,18 @@ export class Agent {
     const rawArgs = trimmed.slice('/spotify'.length).trim().toLowerCase();
     if (!rawArgs || rawArgs === 'status') {
       const auth = this.spotifyClient.isAuthenticated() ? 'Connected' : 'Not connected';
-      await channel.send(`Spotify: **${auth}**\nDevice: ${this.spotifyClient.getDeviceId() || 'none selected'}`, msg.channelId);
+      const accountName = this.spotifyClient.getAccountName();
+      const product = this.spotifyClient.getProduct();
+      let status = `Spotify: **${auth}**`;
+      if (accountName) status += `\nAccount: **${accountName}**`;
+      if (product) status += `\nPlan: ${product}`;
+      status += `\nDevice: ${this.spotifyClient.getDeviceId() || 'none selected'}`;
+      await channel.send(status, msg.channelId);
+      return;
+    }
+    if (rawArgs === 'logout') {
+      this.spotifyClient.logout();
+      await channel.send('Spotify disconnected. Run `/spotify auth` to reconnect.', msg.channelId);
       return;
     }
     if (rawArgs === 'now' || rawArgs === 'playing' || rawArgs === 'np') {
@@ -1771,9 +1782,41 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
       if (!rawArgs || rawArgs === 'status') {
         const auth = this.spotifyClient.isAuthenticated() ? 'Connected' : 'Not connected';
         const device = this.spotifyClient.getDeviceId() || 'none';
-        const premium = this.spotifyClient.getPremiumStatus();
-        const premiumLabel = premium === null ? '' : premium ? ' | Premium' : ' | Free (no playback control)';
-        await channel.send(`Spotify: **${auth}**${premiumLabel}\nDevice: ${device !== 'none' ? device : 'none selected'}`, channelId);
+
+        let accountName = this.spotifyClient.getAccountName();
+        let accountId = this.spotifyClient.getAccountId();
+        let product = this.spotifyClient.getProduct();
+        let accountError = '';
+
+        if (!accountName) {
+          try {
+            await this.spotifyClient.saveAccountInfo();
+            accountName = this.spotifyClient.getAccountName();
+            accountId = this.spotifyClient.getAccountId();
+            product = this.spotifyClient.getProduct();
+          } catch (err: any) {
+            accountError = err.message;
+            logger.warn({ err: err.message }, 'Failed to fetch Spotify account info');
+          }
+        }
+
+        let premium = this.spotifyClient.getPremiumStatus();
+        if (premium === null) {
+          premium = await this.spotifyClient.checkPremium();
+        }
+
+        let status = `Spotify: **${auth}**`;
+        if (accountName) status += `\nAccount: **${accountName}**`;
+        if (accountId) status += `\nUser ID: ${accountId}`;
+        if (product) status += `\nPlan: ${product}`;
+        if (premium === true) {
+          status += ' — all features available';
+        } else if (premium === false) {
+          status += ' — playback control requires Premium';
+        }
+        if (accountError) status += `\n⚠ Could not verify account: ${accountError}`;
+        status += `\nDevice: ${device !== 'none' ? device : 'none selected'}`;
+        await channel.send(status, channelId);
         return true;
       }
 
@@ -1930,7 +1973,13 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
         return true;
       }
 
-      await channel.send('Unknown /spotify command. Available: /spotify, /spotify auth, /spotify code <code>, /spotify player, /spotify devices, /spotify device <id>, /spotify now', channelId);
+      if (rawArgs === 'logout') {
+        this.spotifyClient.logout();
+        await channel.send('Spotify disconnected. Run `/spotify auth` to reconnect.', channelId);
+        return true;
+      }
+
+      await channel.send('Unknown /spotify command. Available: /spotify, /spotify auth, /spotify code <code>, /spotify logout, /spotify player, /spotify devices, /spotify device <id>, /spotify now', channelId);
       return true;
     }
 
