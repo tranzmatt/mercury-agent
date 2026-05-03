@@ -16,6 +16,10 @@ export class ChannelRegistry {
     }
   }
 
+  getCliChannel(): CLIChannel | undefined {
+    return this.channels.get('cli') as CLIChannel | undefined;
+  }
+
   register(type: ChannelType, channel: Channel): void {
     channel.onMessage((msg) => this.handleIncomingMessage(msg));
     this.channels.set(type, channel);

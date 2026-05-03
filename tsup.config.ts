@@ -11,8 +11,6 @@ export default defineConfig({
   minify: false,
   banner: { js: "#!/usr/bin/env node" },
   external: [
-    "react",
-    "ink",
     "grammy",
     "better-sqlite3",
   ],

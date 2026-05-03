@@ -1,0 +1,85 @@
+import type { ProgrammingModeState } from '../core/programming-mode.js';
+import type { SubAgentStatus } from '../types/agent.js';
+import type { PermissionMode } from '../channels/base.js';
+
+export type AppMode = 'splash' | 'chat' | 'coding' | 'spotify' | 'menu';
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'agent' | 'system';
+  content: string;
+  timestamp: number;
+  streaming?: boolean;
+}
+
+export interface ToolStep {
+  id: string;
+  toolName: string;
+  label: string;
+  status: 'running' | 'done' | 'error';
+  elapsed?: number;
+  result?: string;
+}
+
+export interface SubAgentInfo {
+  id: string;
+  task: string;
+  status: SubAgentStatus;
+  progress?: string;
+  startedAt: number;
+}
+
+export interface SidebarSection {
+  title: string;
+  items: SidebarItem[];
+}
+
+export interface SidebarItem {
+  icon: string;
+  label: string;
+  detail?: string;
+  active?: boolean;
+}
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  loaded: boolean;
+}
+
+export interface ProviderInfo {
+  name: string;
+  model: string;
+  badge?: string;
+}
+
+export interface TokenInfo {
+  used: number;
+  budget: number;
+  percentage: number;
+}
+
+export interface MercuryAppState {
+  mode: AppMode;
+  programmingMode: ProgrammingModeState;
+  projectContext: string | null;
+  permissionMode: PermissionMode;
+  chatMessages: ChatMessage[];
+  toolSteps: ToolStep[];
+  subAgents: SubAgentInfo[];
+  skills: SkillInfo[];
+  provider: ProviderInfo | null;
+  tokenInfo: TokenInfo | null;
+  sidebarSections: SidebarSection[];
+  agentName: string;
+  version: string;
+  isThinking: boolean;
+  permissionPrompt: PermissionPromptState | null;
+}
+
+export interface PermissionPromptState {
+  type: 'mode' | 'ask' | 'continue';
+  message: string;
+  options?: Array<{ value: string; label: string }>;
+  resolve: (value: string | boolean) => void;
+}

@@ -1040,9 +1040,7 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
   const name = config.identity.name;
 
   if (!isDaemon) {
-    banner();
-    console.log(chalk.white(`  ${name} is waking up...`));
-    console.log('');
+    logger.info(`${name} is waking up...`);
   } else {
     logger.info(`${name} is waking up (daemon mode)...`);
   }
@@ -1071,10 +1069,7 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
       const marker = key === defaultProvider ? ' ← default' : '';
       return `${label}: ${model}${marker}`;
     });
-
-    console.log('');
-    console.log(chalk.bgMagenta.black.bold(` ⚡ ${getProviderLabel(defaultProvider)} · ${defaultModel} `));
-    console.log(chalk.dim(`  Providers: ${providerSummary.join('  ·  ')}`));
+    logger.info({ providers: providerSummary, default: getProviderLabel(defaultProvider) }, 'Providers loaded');
   } else {
     logger.info({ providers: available, default: defaultProvider }, 'Providers loaded');
   }
@@ -1082,7 +1077,7 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
   const skillLoader = new SkillLoader();
   const skills = skillLoader.discover();
   if (!isDaemon) {
-    console.log(chalk.dim(`  Skills: ${skills.length > 0 ? skills.map(s => s.name).join(', ') : 'none installed'}`));
+    logger.info(`Skills: ${skills.length > 0 ? skills.map(s => s.name).join(', ') : 'none installed'}`);
   }
 
   const scheduler = new Scheduler(config);
@@ -1098,7 +1093,7 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
     try {
       userMemory = new UserMemoryStore(config);
       if (!isDaemon) {
-        console.log(chalk.dim(`  Second brain: enabled (${userMemory.getSummary().total} existing memories)`));
+        logger.info(`Second brain: enabled (${userMemory.getSummary().total} existing memories)`);
       } else {
         logger.info({ total: userMemory.getSummary().total }, 'Second brain loaded');
       }
@@ -1196,8 +1191,9 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
     agent.setSupervisor(supervisor);
   }
 
+  let spotifyClient: SpotifyClient | undefined;
   if (config.spotify.clientId && config.spotify.clientSecret) {
-    const spotifyClient = new SpotifyClient(config);
+    spotifyClient = new SpotifyClient(config);
     capabilities.setSpotifyClient(spotifyClient);
     capabilities.registerSpotifyTools();
     agent.setSpotifyClient(spotifyClient);
@@ -1211,11 +1207,8 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
       const accountName = spotifyClient.getAccountName();
       const label = accountName ? ` as ${accountName}` : '';
       logger.info(`Spotify connected${label} (token available)`);
-      if (!isDaemon) {
-        console.log(chalk.green(`  Spotify: connected${label}`));
-      }
-    } else if (!isDaemon) {
-      console.log(chalk.dim('  Spotify: not connected — run /spotify auth to link your account'));
+    } else {
+      logger.info('Spotify: not connected — run /spotify auth to link your account');
     }
   }
 
@@ -1255,22 +1248,35 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
 
   if (!isDaemon) {
     if (config.identity.creator) {
-      console.log(chalk.dim(`  Creator: ${config.identity.creator}`));
+      logger.info(`Creator: ${config.identity.creator}`);
     }
-    hr();
+
+    const cliChannel = channels.getCliChannel();
+    if (cliChannel) {
+      await channels.startAll();
+
+      const skillInfos = skills.map((s) => ({ name: s.name, description: s.description, loaded: true }));
+      cliChannel.initSplash(name, pkgVersion);
+      cliChannel.setSkills(skillInfos);
+      cliChannel.setProvider(getProviderLabel(defaultProvider), defaultModel);
+
+      const budgetStatus = tokenBudget.getStatusText();
+      cliChannel.setTokenInfo(tokenBudget.getDailyUsed(), tokenBudget.getBudget(), Math.round(tokenBudget.getUsagePercentage()));
+
+      cliChannel.mountTUI((inputText: string) => {
+        cliChannel.sendUserMessage(inputText);
+      }, spotifyClient);
+    } else {
+      await channels.startAll();
+    }
 
     const mode = cliChannel && await cliChannel.askPermissionMode?.();
     if (mode === 'allow-all') {
       capabilities.permissions.setAutoApproveAll(true);
       capabilities.permissions.addTempScope('/', true, true);
     }
-
-    console.log('');
-    console.log(chalk.green(`  ${name} is live. Type a message and press Enter.`));
-    console.log(chalk.dim('  Ctrl+C to exit · /help for commands'));
-    console.log('');
-    cliChannel?.showPrompt();
   } else {
+    await channels.startAll();
     logger.info({ channels: activeCh, tools: toolNames }, 'Mercury is live (daemon mode)');
   }
 
