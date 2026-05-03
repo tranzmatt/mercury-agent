@@ -71,6 +71,34 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   const [skillsLoaded, setSkillsLoaded] = React.useState(0);
   const [showStartupDetails, setShowStartupDetails] = React.useState(false);
   const [spotifyNow, setSpotifyNow] = React.useState('');
+  const [inputHistory, setInputHistory] = React.useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = React.useState<number>(-1);
+  const [historyDraft, setHistoryDraft] = React.useState<string>('');
+
+  const slashCommands = React.useMemo(() => [
+    '/help',
+    '/status',
+    '/menu',
+    '/chat',
+    '/code',
+    '/code plan',
+    '/code execute',
+    '/code off',
+    '/spotify',
+    '/budget',
+    '/permissions',
+    '/memory',
+    '/agents',
+    '/view',
+    '/view balanced',
+    '/view detailed',
+  ], []);
+
+  const slashSuggestions = React.useMemo(() => {
+    if (!input.startsWith('/')) return [];
+    const q = input.toLowerCase();
+    return slashCommands.filter((cmd) => cmd.startsWith(q)).slice(0, 5);
+  }, [input, slashCommands]);
   
 
   React.useEffect(() => {
@@ -143,6 +171,29 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     if (state.permissionPrompt) {
       const options = state.permissionPrompt.options || [];
       if (options.length > 0) {
+        const lower = ch?.toLowerCase?.();
+        if (lower === 'y') {
+          const yes = options.find((opt) => opt.value === 'yes');
+          if (yes) {
+            onPermissionResolve(yes.value);
+            return;
+          }
+        }
+        if (lower === 'n') {
+          const no = options.find((opt) => opt.value === 'no');
+          if (no) {
+            onPermissionResolve(no.value);
+            return;
+          }
+        }
+        if (lower === 'a') {
+          const always = options.find((opt) => opt.value === 'always');
+          if (always) {
+            onPermissionResolve(always.value);
+            return;
+          }
+        }
+
         if (key.upArrow) setPermIdx((i) => Math.max(0, i - 1));
         else if (key.downArrow) setPermIdx((i) => Math.min(options.length - 1, i + 1));
         else if (key.return) {
@@ -198,6 +249,11 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
 
     if (state.mode === 'splash') return;
 
+    if ((ch === 'v' || ch === 'V') && !state.permissionPrompt) {
+      onInput('/view toggle');
+      return;
+    }
+
     if (key.escape) {
       if (state.mode === 'coding') {
         onInput('/chat');
@@ -209,8 +265,51 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       const trimmed = input.trim();
       if (trimmed) {
         onInput(trimmed);
+        setInputHistory((prev) => {
+          if (prev[prev.length - 1] === trimmed) return prev;
+          return [...prev.slice(-99), trimmed];
+        });
+        setHistoryIndex(-1);
+        setHistoryDraft('');
         setInput('');
       }
+      return;
+    }
+
+    if (key.tab) {
+      if (input.startsWith('/') && slashSuggestions.length > 0) {
+        const exactIdx = slashSuggestions.findIndex((cmd) => cmd === input);
+        const nextIdx = exactIdx >= 0 ? (exactIdx + 1) % slashSuggestions.length : 0;
+        setInput(slashSuggestions[nextIdx]);
+      }
+      return;
+    }
+
+    if (key.upArrow) {
+      if (inputHistory.length === 0) return;
+      if (historyIndex === -1) {
+        setHistoryDraft(input);
+        const next = inputHistory.length - 1;
+        setHistoryIndex(next);
+        setInput(inputHistory[next] ?? '');
+        return;
+      }
+      const next = Math.max(0, historyIndex - 1);
+      setHistoryIndex(next);
+      setInput(inputHistory[next] ?? '');
+      return;
+    }
+
+    if (key.downArrow) {
+      if (historyIndex === -1) return;
+      const next = historyIndex + 1;
+      if (next >= inputHistory.length) {
+        setHistoryIndex(-1);
+        setInput(historyDraft);
+        return;
+      }
+      setHistoryIndex(next);
+      setInput(inputHistory[next] ?? '');
       return;
     }
 
@@ -295,6 +394,14 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       {showInput && (
         <InputBox input={input} agentName={state.agentName} />
       )}
+      {showInput && slashSuggestions.length > 0 && (
+        <Box flexDirection="column" paddingX={1}>
+          <Text dimColor>Suggestions (Tab to complete):</Text>
+          {slashSuggestions.map((cmd, idx) => (
+            <Text key={cmd} color={idx === 0 ? 'cyan' : 'gray'}>{idx === 0 ? '›' : ' '} {cmd}</Text>
+          ))}
+        </Box>
+      )}
     </Box>
   );
 }
@@ -322,6 +429,7 @@ function StatusBarView({ state }: { state: TuiState }) {
           <Text bold color="cyan">{state.agentName}</Text>
           {state.programmingMode !== 'off' && <Text> <Text color={modeColor} bold>{modeLabel}</Text></Text>}
           {state.projectContext && <Text> <Text color="gray">|</Text> <Text color="blue">{state.projectContext}</Text></Text>}
+          <Text> <Text color="gray">|</Text> <Text color="yellow">View: {state.viewMode}</Text></Text>
           <Text> <Text color="gray">|</Text> <Text color="green">{state.permissionMode === 'allow-all' ? '🔓' : '🔒'}</Text></Text>
         </Box>
         <Text color="magenta">{providerBadge}</Text>
@@ -346,7 +454,7 @@ function ChatBody({ state }: { state: TuiState }) {
       {state.sidebarSections.length > 0 && <SidebarView sections={state.sidebarSections} />}
       <Box flexDirection="column" flexGrow={1}>
         <ChatMessagesView messages={state.chatMessages} agentName={state.agentName} />
-        {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} />}
+        {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
         {state.isThinking && <Box marginTop={1} marginLeft={2}><Text dimColor>{state.agentName} is thinking...</Text></Box>}
         {state.subAgents.length > 0 && <AgentPanelView agents={state.subAgents} />}
       </Box>
@@ -385,7 +493,7 @@ function CodingBody({ state }: { state: TuiState }) {
       </Box>
       <Box flexDirection="column" flexGrow={1}>
         <ChatMessagesView messages={state.chatMessages} agentName={state.agentName} />
-        {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} />}
+        {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
         {state.isThinking && <Box marginTop={1} marginLeft={2}><Text dimColor>{state.agentName} is thinking...</Text></Box>}
       </Box>
     </Box>
@@ -465,12 +573,13 @@ function ChatMessagesView({ messages, agentName }: { messages: ChatMessage[]; ag
   );
 }
 
-function ToolStepsView({ steps }: { steps: ToolStep[] }) {
-  const visible = steps.slice(-6);
+function ToolStepsView({ steps, viewMode }: { steps: ToolStep[]; viewMode: 'balanced' | 'detailed' }) {
+  const visible = viewMode === 'detailed' ? steps.slice(-20) : steps.slice(-6);
   const runningCount = visible.filter((s) => s.status === 'running').length;
+  const doneCount = visible.filter((s) => s.status === 'done').length;
   return (
     <Box flexDirection="column" marginLeft={2} marginTop={1}>
-      <Text color="gray">Activity {runningCount > 0 ? `· ${runningCount} running` : '· idle'}</Text>
+      <Text color="gray">Activity · {viewMode} · {runningCount > 0 ? `${runningCount} running` : `${doneCount} completed`}</Text>
       {visible.map((step) => (
         <Box key={step.id}>
           <Text>
@@ -480,9 +589,10 @@ function ToolStepsView({ steps }: { steps: ToolStep[] }) {
           <Text dimColor>{step.label}</Text>
           {step.status === 'running' && <Text color="yellow"> …</Text>}
           {step.status === 'done' && step.elapsed != null && <Text dimColor> ({step.elapsed.toFixed(1)}s)</Text>}
-          {step.status === 'done' && step.result && <Text dimColor> · {step.result}</Text>}
+          {(viewMode === 'detailed' || step.status === 'done') && step.result && <Text dimColor> · {step.result}</Text>}
         </Box>
       ))}
+      <Text dimColor>Press V to toggle Balanced/Detailed</Text>
     </Box>
   );
 }
@@ -529,6 +639,7 @@ function PermPromptView({ prompt, activeIdx }: { prompt: PermissionPromptState; 
   const options = prompt.options || [];
 
   if (options.length > 0) {
+    const hasAlways = options.some((opt) => opt.value === 'always');
     return (
       <Box flexDirection="column" marginTop={1} paddingX={1}>
         <Box><Text bold color="yellow">⚠ {prompt.message}</Text></Box>
@@ -538,7 +649,7 @@ function PermPromptView({ prompt, activeIdx }: { prompt: PermissionPromptState; 
             <Text color={i === activeIdx ? 'cyan' : 'gray'}>{opt.label}</Text>
           </Box>
         ))}
-        <Text dimColor>  ↑↓ to choose, Enter to confirm, Esc to cancel</Text>
+        <Text dimColor>{hasAlways ? '  ↑↓ choose · Enter confirm · Y/N/A shortcuts · Esc cancel' : '  ↑↓ choose · Enter confirm · Y/N shortcuts · Esc cancel'}</Text>
       </Box>
     );
   }

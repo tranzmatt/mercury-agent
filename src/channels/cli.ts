@@ -9,6 +9,7 @@ import { TuiApp } from '../ui/App.js';
 
 export interface TuiState {
   mode: AppMode;
+  viewMode: 'balanced' | 'detailed';
   chatMessages: ChatMessage[];
   toolSteps: ToolStep[];
   isThinking: boolean;
@@ -27,6 +28,7 @@ export interface TuiState {
 
 const defaultState: TuiState = {
   mode: 'splash',
+  viewMode: 'balanced',
   chatMessages: [],
   toolSteps: [],
   isThinking: false,
@@ -131,6 +133,18 @@ export class CLIChannel extends BaseChannel {
       }
       if (trimmed === '/splash') {
         this.update({ mode: 'splash' });
+        return;
+      }
+      if (trimmed === '/view balanced') {
+        this.update({ viewMode: 'balanced' });
+        return;
+      }
+      if (trimmed === '/view detailed') {
+        this.update({ viewMode: 'detailed' });
+        return;
+      }
+      if (trimmed === '/view toggle' || trimmed === '/view') {
+        this.update({ viewMode: this.state.viewMode === 'balanced' ? 'detailed' : 'balanced' });
         return;
       }
       onInput(trimmed);
