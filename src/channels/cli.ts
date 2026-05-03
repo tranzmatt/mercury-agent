@@ -48,6 +48,7 @@ export class CLIChannel extends BaseChannel {
   private agentName: string;
   private inkInstance: ReturnType<typeof render> | null = null;
   private inputHandler: ((text: string) => void) | null = null;
+  private exitHandler: (() => void) | null = null;
   private permissionResolver: ((value: string | boolean) => void) | null = null;
   private menuDepth = 0;
   private menuAbortController: AbortController | null = null;
@@ -96,13 +97,19 @@ export class CLIChannel extends BaseChannel {
           }
           this.update({ permissionPrompt: null });
         },
+        onExit: () => {
+          this.inkInstance?.unmount();
+          this.inkInstance = null;
+          this.exitHandler?.();
+        },
         spotifyClient: this.spotifyClient,
       }),
     );
   }
 
-  mountTUI(onInput: (text: string) => void, spotifyClient?: any): void {
+  mountTUI(onInput: (text: string) => void, spotifyClient?: any, onExit?: () => void): void {
     this.spotifyClient = spotifyClient ?? null;
+    this.exitHandler = onExit ?? null;
 
     this.inputHandler = (text: string) => {
       const trimmed = text.trim();
@@ -139,6 +146,11 @@ export class CLIChannel extends BaseChannel {
             this.permissionResolver = null;
           }
           this.update({ permissionPrompt: null });
+        },
+        onExit: () => {
+          this.inkInstance?.unmount();
+          this.inkInstance = null;
+          this.exitHandler?.();
         },
         spotifyClient: this.spotifyClient,
       }),

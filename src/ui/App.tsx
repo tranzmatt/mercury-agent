@@ -30,10 +30,11 @@ export interface TuiAppProps {
   state: TuiState;
   onInput: (text: string) => void;
   onPermissionResolve: (value: string | boolean) => void;
+  onExit: () => void;
   spotifyClient?: SpotifyClient | null;
 }
 
-export function TuiApp({ state, onInput, onPermissionResolve, spotifyClient }: TuiAppProps) {
+export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyClient }: TuiAppProps) {
   const { exit } = useApp();
   const [input, setInput] = React.useState('');
   const [permIdx, setPermIdx] = React.useState(0);
@@ -97,7 +98,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, spotifyClient }: T
 
   useInput((ch, key) => {
     if (key.ctrl && (key as any).name === 'c') {
-      process.kill(process.pid, 'SIGINT');
+      onExit();
       return;
     }
 

@@ -1265,7 +1265,9 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
 
       cliChannel.mountTUI((inputText: string) => {
         cliChannel.sendUserMessage(inputText);
-      }, spotifyClient);
+      }, spotifyClient, () => {
+        process.kill(process.pid, 'SIGINT');
+      });
     } else {
       await channels.startAll();
     }
