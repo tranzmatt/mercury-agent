@@ -340,6 +340,11 @@ export class CLIChannel extends BaseChannel {
         permissionPrompt: {
           type: 'ask',
           message: prompt,
+          options: [
+            { value: 'yes', label: 'Yes — approve once' },
+            { value: 'always', label: 'Always — remember this permission' },
+            { value: 'no', label: 'No — deny' },
+          ],
           resolve: () => {},
         },
       });
@@ -348,11 +353,18 @@ export class CLIChannel extends BaseChannel {
 
   async askToContinue(question: string, _targetId?: string): Promise<boolean> {
     return new Promise((resolve) => {
-      this.permissionResolver = (val) => resolve(Boolean(val));
+      this.permissionResolver = (val) => {
+        const normalized = typeof val === 'string' ? val.trim().toLowerCase() : val;
+        resolve(normalized === true || normalized === 'yes' || normalized === 'y');
+      };
       this.update({
         permissionPrompt: {
           type: 'continue',
           message: question,
+          options: [
+            { value: 'yes', label: 'Yes — continue' },
+            { value: 'no', label: 'No — stop' },
+          ],
           resolve: () => {},
         },
       });

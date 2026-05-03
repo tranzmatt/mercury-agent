@@ -117,6 +117,12 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     }
   }, [state.mode, spotifyClient]);
 
+  React.useEffect(() => {
+    if (state.permissionPrompt) {
+      setPermIdx(0);
+    }
+  }, [state.permissionPrompt]);
+
   useInput((ch, key) => {
     if (ch === '\u0003' || (key.ctrl && ((key as any).name === 'c' || ch?.toLowerCase?.() === 'c'))) {
       onExit();
@@ -135,6 +141,18 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     }
 
     if (state.permissionPrompt) {
+      const options = state.permissionPrompt.options || [];
+      if (options.length > 0) {
+        if (key.upArrow) setPermIdx((i) => Math.max(0, i - 1));
+        else if (key.downArrow) setPermIdx((i) => Math.min(options.length - 1, i + 1));
+        else if (key.return) {
+          if (options[permIdx]) onPermissionResolve(options[permIdx].value);
+        } else if (key.escape) {
+          onPermissionResolve(state.permissionPrompt.type === 'mode' ? 'ask-me' : 'no');
+        }
+        return;
+      }
+
       if (state.permissionPrompt.type === 'continue') {
         if (ch === 'y' || ch === 'Y') onPermissionResolve(true);
         else if (ch === 'n' || ch === 'N') onPermissionResolve(false);
@@ -143,14 +161,6 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       if (state.permissionPrompt.type === 'ask') {
         if (key.return) onPermissionResolve('');
         return;
-      }
-      const options = state.permissionPrompt.options || [];
-      if (key.upArrow) setPermIdx((i) => Math.max(0, i - 1));
-      else if (key.downArrow) setPermIdx((i) => Math.min(options.length - 1, i + 1));
-      else if (key.return) {
-        if (options[permIdx]) onPermissionResolve(options[permIdx].value);
-      } else if (key.escape) {
-        onPermissionResolve(state.permissionPrompt.type === 'mode' ? 'ask-me' : false);
       }
       return;
     }
@@ -217,48 +227,53 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
 
   if (state.mode === 'splash') {
     return (
-      <Box flexDirection="row" flexGrow={1} paddingX={1}>
-        <Box flexDirection="column" width={34} paddingRight={2}>
-          {MERCURY_MARK.map((line, i) => (
-            <Text key={i} color={BRAND.logo}>{line}</Text>
-          ))}
-          <Text bold color={BRAND.title}>MERCURY</Text>
-          <Text color={BRAND.subtitle}>Your soul-driven AI agent</Text>
-          <Text color="gray">{'─'.repeat(30)}</Text>
-          <Text color="green">● Core {splashPhase === 'ready' ? 'ready' : 'booting'}</Text>
-          <Text color={state.provider ? 'green' : 'yellow'}>{state.provider ? '●' : '◐'} Provider {state.provider ? 'ready' : 'loading'}</Text>
-          <Text color={skillsLoaded >= state.skills.length ? 'green' : 'yellow'}>{skillsLoaded >= state.skills.length ? '●' : '◐'} Skills {skillsLoaded}/{state.skills.length}</Text>
-          <Text color="gray">{'─'.repeat(30)}</Text>
-          <Text dimColor>Press Enter to open chat</Text>
-          <Text dimColor>Press D for startup details</Text>
+      <Box flexDirection="column" flexGrow={1}>
+        <Box flexDirection="row" flexGrow={1} paddingX={1}>
+          <Box flexDirection="column" width={34} paddingRight={2}>
+            {MERCURY_MARK.map((line, i) => (
+              <Text key={i} color={BRAND.logo}>{line}</Text>
+            ))}
+            <Text bold color={BRAND.title}>MERCURY</Text>
+            <Text color={BRAND.subtitle}>Your soul-driven AI agent</Text>
+            <Text color="gray">{'─'.repeat(30)}</Text>
+            <Text color="green">● Core {splashPhase === 'ready' ? 'ready' : 'booting'}</Text>
+            <Text color={state.provider ? 'green' : 'yellow'}>{state.provider ? '●' : '◐'} Provider {state.provider ? 'ready' : 'loading'}</Text>
+            <Text color={skillsLoaded >= state.skills.length ? 'green' : 'yellow'}>{skillsLoaded >= state.skills.length ? '●' : '◐'} Skills {skillsLoaded}/{state.skills.length}</Text>
+            <Text color="gray">{'─'.repeat(30)}</Text>
+            <Text dimColor>Press Enter to open chat</Text>
+            <Text dimColor>Press D for startup details</Text>
+          </Box>
+          <Box flexDirection="column" flexGrow={1}>
+            <Text bold color="white">Session</Text>
+            <Text color="gray">{'─'.repeat(56)}</Text>
+            <Text>Version: <Text color="cyan">{state.version}</Text></Text>
+            <Text>Provider: <Text color={BRAND.accent}>{state.provider ? `${state.provider.name} · ${state.provider.model}` : 'Detecting...'}</Text></Text>
+            <Text>Mode: <Text color="yellow">Startup</Text></Text>
+            {state.tokenInfo && (
+              <Text>Budget: <Text color="green">{state.tokenInfo.used.toLocaleString()}/{state.tokenInfo.budget.toLocaleString()} ({state.tokenInfo.percentage}%)</Text></Text>
+            )}
+            <Text color="gray">{'─'.repeat(56)}</Text>
+            <Text bold color="white">Capabilities</Text>
+            <Text>Skills loaded: <Text color="cyan">{skillsLoaded}</Text> / {state.skills.length}</Text>
+            {showStartupDetails ? (
+              <Box flexDirection="column" marginTop={1}>
+                {state.skills.slice(0, skillsLoaded).map((skill, i) => (
+                  <Text key={i} dimColor>- {skill.name}</Text>
+                ))}
+              </Box>
+            ) : (
+              <Text dimColor>Details hidden (press D)</Text>
+            )}
+            <Text color="gray">{'─'.repeat(56)}</Text>
+            <Text>{splashPhase === 'ready' ? 'Mercury is live.' : 'Initializing Mercury...'}</Text>
+            {splashPhase === 'ready' && <Text color="green">Ready. Enter to open chat.</Text>}
+            {!state.provider && <Text color="yellow">Waiting for provider handshake...</Text>}
+            {state.provider && <Text color="green">Provider connected.</Text>}
+          </Box>
         </Box>
-        <Box flexDirection="column" flexGrow={1}>
-          <Text bold color="white">Session</Text>
-          <Text color="gray">{'─'.repeat(56)}</Text>
-          <Text>Version: <Text color="cyan">{state.version}</Text></Text>
-          <Text>Provider: <Text color={BRAND.accent}>{state.provider ? `${state.provider.name} · ${state.provider.model}` : 'Detecting...'}</Text></Text>
-          <Text>Mode: <Text color="yellow">Startup</Text></Text>
-          {state.tokenInfo && (
-            <Text>Budget: <Text color="green">{state.tokenInfo.used.toLocaleString()}/{state.tokenInfo.budget.toLocaleString()} ({state.tokenInfo.percentage}%)</Text></Text>
-          )}
-          <Text color="gray">{'─'.repeat(56)}</Text>
-          <Text bold color="white">Capabilities</Text>
-          <Text>Skills loaded: <Text color="cyan">{skillsLoaded}</Text> / {state.skills.length}</Text>
-          {showStartupDetails ? (
-            <Box flexDirection="column" marginTop={1}>
-              {state.skills.slice(0, skillsLoaded).map((skill, i) => (
-                <Text key={i} dimColor>- {skill.name}</Text>
-              ))}
-            </Box>
-          ) : (
-            <Text dimColor>Details hidden (press D)</Text>
-          )}
-          <Text color="gray">{'─'.repeat(56)}</Text>
-          <Text>{splashPhase === 'ready' ? 'Mercury is live.' : 'Initializing Mercury...'}</Text>
-          {splashPhase === 'ready' && <Text color="green">Ready. Enter to open chat.</Text>}
-          {!state.provider && <Text color="yellow">Waiting for provider handshake...</Text>}
-          {state.provider && <Text color="green">Provider connected.</Text>}
-        </Box>
+        {state.permissionPrompt && (
+          <PermPromptView prompt={state.permissionPrompt} activeIdx={permIdx} />
+        )}
       </Box>
     );
   }
@@ -452,15 +467,20 @@ function ChatMessagesView({ messages, agentName }: { messages: ChatMessage[]; ag
 
 function ToolStepsView({ steps }: { steps: ToolStep[] }) {
   const visible = steps.slice(-6);
+  const runningCount = visible.filter((s) => s.status === 'running').length;
   return (
     <Box flexDirection="column" marginLeft={2} marginTop={1}>
+      <Text color="gray">Activity {runningCount > 0 ? `· ${runningCount} running` : '· idle'}</Text>
       {visible.map((step) => (
         <Box key={step.id}>
+          <Text>
+            {step.status === 'running' ? '⏳' : step.status === 'done' ? '✅' : '❌'}
+          </Text>
+          <Text> </Text>
           <Text dimColor>{step.label}</Text>
-          {step.status === 'running' && <Text color="yellow"> ⠋</Text>}
+          {step.status === 'running' && <Text color="yellow"> …</Text>}
           {step.status === 'done' && step.elapsed != null && <Text dimColor> ({step.elapsed.toFixed(1)}s)</Text>}
           {step.status === 'done' && step.result && <Text dimColor> · {step.result}</Text>}
-          {step.status === 'error' && <Text color="red"> ✗</Text>}
         </Box>
       ))}
     </Box>
@@ -507,6 +527,21 @@ function SidebarView({ sections }: { sections: SidebarSection[] }) {
 
 function PermPromptView({ prompt, activeIdx }: { prompt: PermissionPromptState; activeIdx: number }) {
   const options = prompt.options || [];
+
+  if (options.length > 0) {
+    return (
+      <Box flexDirection="column" marginTop={1} paddingX={1}>
+        <Box><Text bold color="yellow">⚠ {prompt.message}</Text></Box>
+        {options.map((opt, i) => (
+          <Box key={opt.value}>
+            <Text>{i === activeIdx ? '●' : '·'} </Text>
+            <Text color={i === activeIdx ? 'cyan' : 'gray'}>{opt.label}</Text>
+          </Box>
+        ))}
+        <Text dimColor>  ↑↓ to choose, Enter to confirm, Esc to cancel</Text>
+      </Box>
+    );
+  }
 
   if (prompt.type === 'continue') {
     return (
