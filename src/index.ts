@@ -1212,6 +1212,25 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
     }
   }
 
+  if (!isDaemon) {
+    const bootCli = channels.getCliChannel();
+    if (bootCli) {
+      await channels.startAll();
+      const skillInfos = skills.map((s) => ({ name: s.name, description: s.description, loaded: true }));
+      bootCli.initSplash(name, pkgVersion);
+      bootCli.setSkills(skillInfos);
+      bootCli.setProvider(getProviderLabel(defaultProvider), defaultModel);
+      bootCli.setTokenInfo(tokenBudget.getDailyUsed(), tokenBudget.getBudget(), Math.round(tokenBudget.getUsagePercentage()));
+      bootCli.mountTUI((inputText: string) => {
+        bootCli.sendUserMessage(inputText);
+      }, spotifyClient, () => {
+        process.exit(0);
+      });
+    } else {
+      await channels.startAll();
+    }
+  }
+
   await agent.birth();
   await agent.wake();
 
@@ -1249,27 +1268,6 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
   if (!isDaemon) {
     if (config.identity.creator) {
       logger.info(`Creator: ${config.identity.creator}`);
-    }
-
-    const cliChannel = channels.getCliChannel();
-    if (cliChannel) {
-      await channels.startAll();
-
-      const skillInfos = skills.map((s) => ({ name: s.name, description: s.description, loaded: true }));
-      cliChannel.initSplash(name, pkgVersion);
-      cliChannel.setSkills(skillInfos);
-      cliChannel.setProvider(getProviderLabel(defaultProvider), defaultModel);
-
-      const budgetStatus = tokenBudget.getStatusText();
-      cliChannel.setTokenInfo(tokenBudget.getDailyUsed(), tokenBudget.getBudget(), Math.round(tokenBudget.getUsagePercentage()));
-
-      cliChannel.mountTUI((inputText: string) => {
-        cliChannel.sendUserMessage(inputText);
-      }, spotifyClient, () => {
-        process.kill(process.pid, 'SIGINT');
-      });
-    } else {
-      await channels.startAll();
     }
 
     const mode = cliChannel && await cliChannel.askPermissionMode?.();

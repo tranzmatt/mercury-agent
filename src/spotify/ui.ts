@@ -14,7 +14,7 @@ export function formatNowPlaying(data: any): string {
   const repeat: Record<string, string> = { off: '', track: '🔂', context: '🔁' };
   const repeatIcon = repeat[data.repeat_state] || '';
   const albumArt = track.album?.images?.[0]?.url;
-  let text = `${status} **${name}** by ${artists}\n`;
+  let text = `${status} ${name} by ${artists}\n`;
   text += `${bar} ${formatTime(progress)}/${formatTime(duration)}\n`;
   text += `${shuffle}${repeatIcon}`;
   if (albumArt) text += ` | Album: ${track.album?.name}`;

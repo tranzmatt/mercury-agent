@@ -17,6 +17,33 @@ const MERCURY_LOGO = [
   '/_/  /_/_____/_/ |_|\\____/\\____/_/ |_| /_/   ',
 ];
 
+const MERCURY_MARK = [
+  '        ╭─╮   ╭─╮        ',
+  '      ╭─╯ ╰───╯ ╰─╮      ',
+  '    ╭─╯             ╰─╮    ',
+  '   │      ●     ●      │   ',
+  '   │         ◡         │   ',
+  '   │                   │   ',
+  '    ╰─╮             ╭─╯    ',
+  '      ╰───╮   ╭───╯      ',
+  '          │   │          ',
+  '         ─┼───┼─         ',
+  '          │   │          ',
+];
+
+const IS_LIGHT_BG = (() => {
+  const fgBg = process.env.COLORFGBG;
+  if (!fgBg) return false;
+  const parts = fgBg.split(';');
+  const bgCode = Number(parts[parts.length - 1]);
+  if (Number.isNaN(bgCode)) return false;
+  return bgCode >= 10;
+})();
+
+const BRAND = IS_LIGHT_BG
+  ? { logo: 'blue', title: 'blue', subtitle: 'gray', accent: 'magenta' }
+  : { logo: 'cyan', title: 'cyan', subtitle: 'gray', accent: 'magenta' };
+
 const STATUS_ICONS: Record<string, { icon: string; color: string }> = {
   pending: { icon: '🔵', color: 'blue' },
   running: { icon: '🟢', color: 'green' },
@@ -42,12 +69,14 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   const [spotifyIdx, setSpotifyIdx] = React.useState(6);
   const [splashPhase, setSplashPhase] = React.useState<'logo' | 'skills' | 'provider' | 'ready'>('logo');
   const [skillsLoaded, setSkillsLoaded] = React.useState(0);
+  const [showStartupDetails, setShowStartupDetails] = React.useState(false);
   const [spotifyNow, setSpotifyNow] = React.useState('');
+  
 
   React.useEffect(() => {
     if (state.mode !== 'splash') return;
     if (splashPhase === 'logo') {
-      const t = setTimeout(() => setSplashPhase('skills'), 400);
+      const t = setTimeout(() => setSplashPhase('skills'), 80);
       return () => clearTimeout(t);
     }
   }, [state.mode, splashPhase]);
@@ -56,10 +85,10 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     if (state.mode !== 'splash') return;
     if (splashPhase === 'skills') {
       if (skillsLoaded >= state.skills.length) {
-        const t = setTimeout(() => setSplashPhase('provider'), 300);
+        const t = setTimeout(() => setSplashPhase('provider'), 60);
         return () => clearTimeout(t);
       }
-      const t = setTimeout(() => setSkillsLoaded((i) => i + 1), 80);
+      const t = setTimeout(() => setSkillsLoaded((i) => i + 1), 20);
       return () => clearTimeout(t);
     }
   }, [state.mode, splashPhase, skillsLoaded, state.skills.length]);
@@ -67,15 +96,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   React.useEffect(() => {
     if (state.mode !== 'splash') return;
     if (splashPhase === 'provider') {
-      const t = setTimeout(() => setSplashPhase('ready'), 500);
-      return () => clearTimeout(t);
-    }
-  }, [state.mode, splashPhase]);
-
-  React.useEffect(() => {
-    if (state.mode !== 'splash') return;
-    if (splashPhase === 'ready') {
-      const t = setTimeout(() => onInput('/chat'), 600);
+      const t = setTimeout(() => setSplashPhase('ready'), 80);
       return () => clearTimeout(t);
     }
   }, [state.mode, splashPhase]);
@@ -97,9 +118,20 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   }, [state.mode, spotifyClient]);
 
   useInput((ch, key) => {
-    if (key.ctrl && (key as any).name === 'c') {
+    if (ch === '\u0003' || (key.ctrl && ((key as any).name === 'c' || ch?.toLowerCase?.() === 'c'))) {
       onExit();
       return;
+    }
+
+    if (state.mode === 'splash') {
+      if (ch === 'd' || ch === 'D') {
+        setShowStartupDetails((v) => !v);
+        return;
+      }
+      if (!state.permissionPrompt && key.return) {
+        onInput('/chat');
+        return;
+      }
     }
 
     if (state.permissionPrompt) {
@@ -154,10 +186,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       return;
     }
 
-    if (state.mode === 'splash') {
-      if (key.return) onInput('/chat');
-      return;
-    }
+    if (state.mode === 'splash') return;
 
     if (key.escape) {
       if (state.mode === 'coding') {
@@ -188,32 +217,48 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
 
   if (state.mode === 'splash') {
     return (
-      <Box flexDirection="column" alignItems="center" paddingY={1}>
-        <Box flexDirection="column" alignItems="center">
-          {MERCURY_LOGO.map((line, i) => <Text key={i} bold color="cyan">{line}</Text>)}
+      <Box flexDirection="row" flexGrow={1} paddingX={1}>
+        <Box flexDirection="column" width={34} paddingRight={2}>
+          {MERCURY_MARK.map((line, i) => (
+            <Text key={i} color={BRAND.logo}>{line}</Text>
+          ))}
+          <Text bold color={BRAND.title}>MERCURY</Text>
+          <Text color={BRAND.subtitle}>Your soul-driven AI agent</Text>
+          <Text color="gray">{'─'.repeat(30)}</Text>
+          <Text color="green">● Core {splashPhase === 'ready' ? 'ready' : 'booting'}</Text>
+          <Text color={state.provider ? 'green' : 'yellow'}>{state.provider ? '●' : '◐'} Provider {state.provider ? 'ready' : 'loading'}</Text>
+          <Text color={skillsLoaded >= state.skills.length ? 'green' : 'yellow'}>{skillsLoaded >= state.skills.length ? '●' : '◐'} Skills {skillsLoaded}/{state.skills.length}</Text>
+          <Text color="gray">{'─'.repeat(30)}</Text>
+          <Text dimColor>Press Enter to open chat</Text>
+          <Text dimColor>Press D for startup details</Text>
         </Box>
-        <Box marginTop={1}><Text dimColor>an AI agent for personal tasks</Text></Box>
-        <Box><Text dimColor>v{state.version} · by Cosmic Stack · mercury.cosmicstack.org</Text></Box>
-        {splashPhase !== 'logo' && (
-          <Box flexDirection="column" marginTop={1} width={50}>
-            <Text bold color="cyan">Skills</Text>
-            {state.skills.slice(0, skillsLoaded).map((skill, i) => (
-              <Box key={i}>
-                <Text color="green">✓</Text>
-                <Text> {skill.name}</Text>
-                <Text dimColor> — {skill.description}</Text>
-              </Box>
-            ))}
-            {skillsLoaded < state.skills.length && <Text dimColor>  loading...</Text>}
-          </Box>
-        )}
-        {(splashPhase === 'provider' || splashPhase === 'ready') && state.provider && (
-          <Box flexDirection="column" marginTop={1} width={50}>
-            <Text bold color="magenta">Provider</Text>
-            <Text>⚡ {state.provider.name} · {state.provider.model}</Text>
-          </Box>
-        )}
-        {splashPhase === 'ready' && <Box marginTop={1}><Text bold color="green">✓ Mercury is live</Text></Box>}
+        <Box flexDirection="column" flexGrow={1}>
+          <Text bold color="white">Session</Text>
+          <Text color="gray">{'─'.repeat(56)}</Text>
+          <Text>Version: <Text color="cyan">{state.version}</Text></Text>
+          <Text>Provider: <Text color={BRAND.accent}>{state.provider ? `${state.provider.name} · ${state.provider.model}` : 'Detecting...'}</Text></Text>
+          <Text>Mode: <Text color="yellow">Startup</Text></Text>
+          {state.tokenInfo && (
+            <Text>Budget: <Text color="green">{state.tokenInfo.used.toLocaleString()}/{state.tokenInfo.budget.toLocaleString()} ({state.tokenInfo.percentage}%)</Text></Text>
+          )}
+          <Text color="gray">{'─'.repeat(56)}</Text>
+          <Text bold color="white">Capabilities</Text>
+          <Text>Skills loaded: <Text color="cyan">{skillsLoaded}</Text> / {state.skills.length}</Text>
+          {showStartupDetails ? (
+            <Box flexDirection="column" marginTop={1}>
+              {state.skills.slice(0, skillsLoaded).map((skill, i) => (
+                <Text key={i} dimColor>- {skill.name}</Text>
+              ))}
+            </Box>
+          ) : (
+            <Text dimColor>Details hidden (press D)</Text>
+          )}
+          <Text color="gray">{'─'.repeat(56)}</Text>
+          <Text>{splashPhase === 'ready' ? 'Mercury is live.' : 'Initializing Mercury...'}</Text>
+          {splashPhase === 'ready' && <Text color="green">Ready. Enter to open chat.</Text>}
+          {!state.provider && <Text color="yellow">Waiting for provider handshake...</Text>}
+          {state.provider && <Text color="green">Provider connected.</Text>}
+        </Box>
       </Box>
     );
   }
@@ -251,6 +296,12 @@ function StatusBarView({ state }: { state: TuiState }) {
 
   return (
     <Box flexDirection="column">
+      <Box paddingX={1}>
+        <Text color={BRAND.logo}>☿</Text>
+        <Text> </Text>
+        <Text bold color={BRAND.title}>MERCURY</Text>
+        <Text color={BRAND.subtitle}> · Your soul-driven AI agent</Text>
+      </Box>
       <Box paddingX={1} paddingBottom={0}>
         <Box flexGrow={1}>
           <Text bold color="cyan">{state.agentName}</Text>
