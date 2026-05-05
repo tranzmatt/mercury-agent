@@ -2,7 +2,37 @@ import type { ProgrammingModeState } from '../core/programming-mode.js';
 import type { SubAgentStatus } from '../types/agent.js';
 import type { PermissionMode } from '../channels/base.js';
 
-export type AppMode = 'splash' | 'chat' | 'coding' | 'spotify' | 'menu';
+export type AppMode = 'splash' | 'chat' | 'coding' | 'workspace' | 'spotify' | 'menu';
+
+export interface WorkspaceTreeNode {
+  id: string;
+  name: string;
+  path: string;
+  depth: number;
+  isDir: boolean;
+  expanded?: boolean;
+}
+
+export interface WorkspaceGitFile {
+  path: string;
+  staged: boolean;
+  status: string;
+}
+
+export interface WorkspaceState {
+  active: boolean;
+  rootPath: string;
+  nodes: WorkspaceTreeNode[];
+  selectedIndex: number;
+  selectedPath: string | null;
+  openedFilePath: string | null;
+  openedFilePreview: string[];
+  gitFiles: WorkspaceGitFile[];
+  stagedCount: number;
+  unstagedCount: number;
+  branch: string;
+  lastAction: string;
+}
 
 export interface ChatMessage {
   id: string;
@@ -75,6 +105,7 @@ export interface MercuryAppState {
   version: string;
   isThinking: boolean;
   permissionPrompt: PermissionPromptState | null;
+  workspace: WorkspaceState | null;
 }
 
 export interface PermissionPromptState {

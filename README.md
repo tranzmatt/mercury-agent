@@ -39,7 +39,7 @@ npm i -g @cosmicstack/mercury-agent
 mercury
 ```
 
-First run triggers the setup wizard — enter your name, an API key, and optionally a Telegram bot token. Takes 30 seconds.
+First run triggers the setup wizard (name, provider, optional Telegram). After setup, Mercury opens the Ink TUI startup screen and asks for your permission mode (`Ask Me` or `Allow All`) before chat starts.
 
 To reconfigure later (change keys, name, settings):
 
@@ -115,7 +115,7 @@ In daemon mode, Telegram becomes your primary channel — CLI is log-only since 
 | `mercury restart` | Restart the background process |
 | `mercury stop` | Stop a background process |
 | `mercury logs` | View recent daemon logs |
-| `mercury doctor` | Reconfigure (Enter to keep current values) |
+| `mercury doctor` | Reconfigure setup (name, providers, channels, permissions defaults) |
 | `mercury setup` | Re-run the setup wizard |
 | `mercury status` | Show config and daemon status |
 | `mercury help` | Show full manual |
@@ -149,6 +149,9 @@ Type these during a conversation — they don't consume API tokens. Work on both
 | `/budget reset` | Reset usage to zero |
 | `/budget set <n>` | Change daily token budget |
 | `/permissions` | Change permission mode (Ask Me / Allow All) |
+| `/view` | Toggle progress view (balanced/detailed) |
+| `/view balanced` | Set compact progress view |
+| `/view detailed` | Set full progress view |
 | `/tasks` | List scheduled tasks |
 | `/memory` | View and manage second brain memory |
 | `/unpair` | Telegram: reset all access |
@@ -170,7 +173,7 @@ Type these during a conversation — they don't consume API tokens. Work on both
 
 | Channel | Features |
 |---------|----------|
-| **CLI** | Readline prompt, arrow-key command menus, real-time text streaming with markdown re-rendering, permission mode picker |
+| **CLI** | Ink TUI, startup permission mode picker, interactive permission prompts (arrow keys + Enter; Y/N/A shortcuts), progress views (balanced/detailed), real-time streaming |
 | **Telegram** | HTML formatting, editable streaming messages, file uploads, typing indicators, multi-user access with admin/member roles |
 
 ### Telegram Access

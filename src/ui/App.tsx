@@ -74,6 +74,11 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   const [inputHistory, setInputHistory] = React.useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = React.useState<number>(-1);
   const [historyDraft, setHistoryDraft] = React.useState<string>('');
+  const [workspacePane, setWorkspacePane] = React.useState<'files' | 'details' | 'git'>('files');
+  const [detailCursor, setDetailCursor] = React.useState(0);
+  const [gitCursor, setGitCursor] = React.useState(0);
+  const [workspaceLeaderActive, setWorkspaceLeaderActive] = React.useState(false);
+  const workspaceLeaderTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
   const slashCommands = React.useMemo(() => [
     '/help',
@@ -83,6 +88,8 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     '/code',
     '/code plan',
     '/code execute',
+    '/code build',
+    '/code workspace',
     '/code off',
     '/spotify',
     '/budget',
@@ -92,6 +99,12 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     '/view',
     '/view balanced',
     '/view detailed',
+    '/ws',
+    '/ws open ',
+    '/ws refresh',
+    '/ws stage all',
+    '/ws commit ',
+    '/ws help',
   ], []);
 
   const slashSuggestions = React.useMemo(() => {
@@ -152,6 +165,8 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   }, [state.permissionPrompt]);
 
   useInput((ch, key) => {
+    const keyChar = (ch || (key as any)?.name || '').toLowerCase();
+
     if (ch === '\u0003' || (key.ctrl && ((key as any).name === 'c' || ch?.toLowerCase?.() === 'c'))) {
       onExit();
       return;
@@ -247,6 +262,76 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       return;
     }
 
+    if (state.mode === 'workspace') {
+      if (!key.ctrl && !key.meta && ch === ';' && input.length === 0) {
+        setWorkspaceLeaderActive(true);
+        if (workspaceLeaderTimeoutRef.current) clearTimeout(workspaceLeaderTimeoutRef.current);
+        workspaceLeaderTimeoutRef.current = setTimeout(() => {
+          setWorkspaceLeaderActive(false);
+          workspaceLeaderTimeoutRef.current = null;
+        }, 1600);
+        return;
+      }
+
+      if (workspaceLeaderActive) {
+        if (workspaceLeaderTimeoutRef.current) {
+          clearTimeout(workspaceLeaderTimeoutRef.current);
+          workspaceLeaderTimeoutRef.current = null;
+        }
+        setWorkspaceLeaderActive(false);
+
+        if (keyChar === 'f') {
+          setWorkspacePane('files');
+          return;
+        }
+        if (keyChar === 'd') {
+          setWorkspacePane('details');
+          return;
+        }
+        if (keyChar === 'g') {
+          setWorkspacePane('git');
+          return;
+        }
+        if (keyChar === 'c') {
+          onInput('/ws close-file');
+          return;
+        }
+
+        if (key.escape) {
+          return;
+        }
+      }
+
+      if (key.upArrow) {
+        if (workspacePane === 'files') onInput('/ws up');
+        else if (workspacePane === 'details') setDetailCursor((i) => Math.max(0, i - 1));
+        else setGitCursor((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        if (workspacePane === 'files') onInput('/ws down');
+        else if (workspacePane === 'details') setDetailCursor((i) => Math.min(3, i + 1));
+        else setGitCursor((i) => Math.min((state.workspace?.gitFiles.length || 1) - 1, i + 1));
+        return;
+      }
+      if (key.leftArrow) {
+        if (workspacePane === 'files') onInput('/ws collapse');
+        return;
+      }
+      if (key.rightArrow) {
+        if (workspacePane === 'files') onInput('/ws expand');
+        return;
+      }
+      if (key.return && !input.trim()) {
+        if (workspacePane === 'files') onInput('/ws open-selected');
+        else if (workspacePane === 'git') {
+          const picked = state.workspace?.gitFiles[gitCursor];
+          if (picked) onInput(`/ws stage ${picked.path}`);
+        }
+        return;
+      }
+    }
+
     if (state.mode === 'splash') return;
 
     if ((ch === 'v' || ch === 'V') && !state.permissionPrompt) {
@@ -319,6 +404,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     }
 
     if (key.ctrl || key.meta) return;
+
     if (ch && ch.length === 1 && !key.escape) {
       setInput((prev) => prev + ch);
     }
@@ -377,7 +463,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     );
   }
 
-  const showInput = !state.permissionPrompt && !state.isThinking && (state.mode === 'chat' || state.mode === 'coding');
+  const showInput = !state.permissionPrompt && !state.isThinking && (state.mode === 'chat' || state.mode === 'coding' || state.mode === 'workspace');
 
   return (
     <Box flexDirection="column" flexGrow={1}>
@@ -385,6 +471,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       {state.mode === 'spotify' ? <SpotifyBody activeIdx={spotifyIdx} nowPlaying={spotifyNow} /> : null}
       {state.mode === 'menu' ? <MenuBody menuIdx={menuIdx} /> : null}
       {state.mode === 'coding' ? <CodingBody state={state} /> : null}
+      {state.mode === 'workspace' ? <WorkspaceBody state={state} workspacePane={workspacePane} detailCursor={detailCursor} gitCursor={gitCursor} workspaceLeaderActive={workspaceLeaderActive} /> : null}
       {state.mode === 'chat' ? (
         <ChatBody state={state} />
       ) : null}
@@ -495,6 +582,89 @@ function CodingBody({ state }: { state: TuiState }) {
         <ChatMessagesView messages={state.chatMessages} agentName={state.agentName} />
         {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
         {state.isThinking && <Box marginTop={1} marginLeft={2}><Text dimColor>{state.agentName} is thinking...</Text></Box>}
+      </Box>
+    </Box>
+  );
+}
+
+function WorkspaceBody({ state, workspacePane, detailCursor, gitCursor, workspaceLeaderActive }: { state: TuiState; workspacePane: 'files' | 'details' | 'git'; detailCursor: number; gitCursor: number; workspaceLeaderActive: boolean }) {
+  const ws = state.workspace;
+  if (!ws?.active) {
+    return (
+      <Box flexDirection="column" flexGrow={1} paddingX={1}>
+        <Text color="yellow">Workspace mode is not active.</Text>
+        <Text dimColor>Use /ws open &lt;path&gt; or type: open workspace /path/to/project</Text>
+      </Box>
+    );
+  }
+
+  const selectedNode = ws.nodes[ws.selectedIndex];
+  const selectedRel = selectedNode ? selectedNode.path.replace(ws.rootPath + '/', '') : '';
+
+  return (
+    <Box flexDirection="column" flexGrow={1}>
+      <Box paddingX={1}>
+        <Text color="gray">Workspace: </Text><Text color="cyan">{ws.rootPath}</Text>
+        <Text color="gray"> | Branch: </Text><Text color="magenta">{ws.branch}</Text>
+        <Text color="gray"> | Pane: </Text><Text color="white">{workspacePane.toUpperCase()}</Text>
+        {workspaceLeaderActive ? <Text color="yellow">  [;] pending: F/D/G/C</Text> : null}
+      </Box>
+      <Box paddingX={1}><Text color="gray">{'═'.repeat(118)}</Text></Box>
+      <Box flexDirection="row" flexGrow={1}>
+        <Box flexDirection="column" width={40} paddingX={1}>
+          <Text bold color={workspacePane === 'files' ? 'white' : 'cyan'}>EXPLORER {workspacePane === 'files' ? '●' : '○'}</Text>
+          <Text color="gray">{'─'.repeat(36)}</Text>
+          {ws.nodes.slice(0, 300).map((node, idx) => {
+            const isSelected = idx === ws.selectedIndex;
+            const prefix = node.isDir ? (node.expanded ? '▾' : '▸') : ' '; 
+            const indent = ' '.repeat(Math.max(0, node.depth * 2));
+            return (
+              <Text key={node.id} color={isSelected ? 'white' : 'gray'}>
+                {isSelected ? '›' : ' '} {indent}{prefix} {node.name}
+              </Text>
+            );
+          })}
+        </Box>
+        <Box><Text color="gray">│</Text></Box>
+        <Box flexDirection="column" flexGrow={1} paddingX={1}>
+          <Text bold color={workspacePane === 'details' ? 'white' : 'cyan'}>EDITOR {workspacePane === 'details' ? '●' : '○'}</Text>
+          <Text color="gray">{'─'.repeat(40)}</Text>
+          <Text color={detailCursor === 0 ? 'white' : undefined}>Selected: <Text color="yellow">{selectedRel || ws.rootPath}</Text></Text>
+          <Text color={detailCursor === 1 ? 'white' : undefined}>Mode: <Text color={state.programmingMode === 'execute' ? 'green' : 'yellow'}>{state.programmingMode.toUpperCase()}</Text></Text>
+          <Text color={detailCursor === 2 ? 'white' : undefined}>Prompt lane: Mercury chat input is active below.</Text>
+          {ws.lastAction ? <Text dimColor>Last: {ws.lastAction}</Text> : null}
+          <Text color="gray">{'─'.repeat(40)}</Text>
+          <Text bold color="cyan">File Preview</Text>
+          {ws.openedFilePath ? <Text color="yellow">{ws.openedFilePath}</Text> : <Text dimColor>No open file. Select in Files and press Enter.</Text>}
+          {ws.openedFilePreview.slice(0, 24).map((line, i) => (
+            <Text key={`${i}:${line.slice(0, 10)}`} dimColor>{String(i + 1).padStart(3, ' ')} {line}</Text>
+          ))}
+          {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
+          {state.subAgents.length > 0 ? <AgentPanelView agents={state.subAgents} /> : <Text dimColor>No sub-agents active. Mercury shows active prompts/tools here.</Text>}
+          <Box marginTop={1}><Text dimColor>Focus: F Files · D Details · G Git · C close file</Text></Box>
+        </Box>
+        <Box><Text color="gray">│</Text></Box>
+        <Box flexDirection="column" width={44} paddingX={1}>
+          <Text bold color={workspacePane === 'git' ? 'white' : 'cyan'}>SOURCE CONTROL {workspacePane === 'git' ? '●' : '○'}</Text>
+          <Text color="gray">{'─'.repeat(40)}</Text>
+          <Text>Staged: <Text color="green">{ws.stagedCount}</Text> · Unstaged: <Text color="yellow">{ws.unstagedCount}</Text></Text>
+          <Text color="gray">{'─'.repeat(40)}</Text>
+          {ws.gitFiles.length === 0 ? <Text dimColor>Clean working tree</Text> : ws.gitFiles.slice(0, 40).map((f, i) => (
+            <Text key={f.path} color={i === gitCursor ? 'white' : (f.staged ? 'green' : 'yellow')}>{i === gitCursor ? '›' : ' '} {f.staged ? '●' : '○'} {f.status} {f.path}</Text>
+          ))}
+          <Box marginTop={1} flexDirection="column">
+            <Text dimColor>/ws stage all</Text>
+            <Text dimColor>/ws stage &lt;file&gt;</Text>
+            <Text dimColor>/ws commit &lt;message&gt;</Text>
+            <Text dimColor>/ws undo &lt;file&gt;</Text>
+            <Text dimColor>/ws refresh</Text>
+            <Text dimColor>Enter in Git pane stages selected file</Text>
+          </Box>
+        </Box>
+      </Box>
+      <Box paddingX={1}><Text color="gray">{'═'.repeat(118)}</Text></Box>
+      <Box paddingX={1}>
+        <Text dimColor>Shortcuts: ; then F/D/G/C · Tree: ↑↓ navigate, ← collapse, → expand, Enter open · Git: Enter stage selected</Text>
       </Box>
     </Box>
   );

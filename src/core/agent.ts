@@ -1,4 +1,5 @@
 import { generateText, streamText, stepCountIs } from 'ai';
+import path from 'node:path';
 import type { ChannelMessage, ChannelType } from '../types/channel.js';
 import type { ProviderRegistry } from '../providers/registry.js';
 import type { Identity } from '../soul/identity.js';
@@ -541,6 +542,11 @@ export class Agent {
       }
 
       if (await this.handleChatCommand(trimmed, msg.channelType, msg.channelId)) {
+        this.lifecycle.transition('idle');
+        return;
+      }
+
+      if (await this.handleWorkspaceNaturalLanguage(trimmed, msg.channelType, msg.channelId)) {
         this.lifecycle.transition('idle');
         return;
       }
@@ -1737,26 +1743,81 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
 
     if (cmd.startsWith('/code')) {
       const rawArgs = trimmed.slice('/code'.length).trim().toLowerCase();
+      const cliChannel = channelType === 'cli' && channel instanceof CLIChannel ? channel : null;
 
-      if (!rawArgs || rawArgs === 'status') {
+      if (!rawArgs) {
+        if (cliChannel) {
+          const choice = await this.presentChoice(
+            'Code mode: open workspace IDE now?',
+            ['Yes, open current workspace', 'No, keep classic coding mode'],
+            channelId,
+            channelType,
+          );
+          if (choice.toLowerCase().startsWith('yes')) {
+            const current = this.capabilities.getCwd();
+            const opened = cliChannel.openWorkspace(current);
+            if (opened.ok) {
+              this.capabilities.permissions.addTempScope(current, true, true);
+              this.programmingMode.setExecute();
+              this.programmingMode.setProjectContext(current);
+              cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
+              await channel.send(`${opened.message}\nWorkspace IDE mode enabled.`, channelId);
+              return true;
+            }
+            await channel.send(opened.message, channelId);
+            return true;
+          }
+        }
         await channel.send(this.programmingMode.getStatusText(), channelId);
+        return true;
+      }
+
+      if (rawArgs === 'status') {
+        await channel.send(this.programmingMode.getStatusText(), channelId);
+        return true;
+      }
+
+      if (rawArgs === 'workspace' || rawArgs === 'ws') {
+        if (!cliChannel) {
+          await channel.send('Workspace IDE mode is currently available in CLI only.', channelId);
+          return true;
+        }
+        const current = this.capabilities.getCwd();
+        const opened = cliChannel.openWorkspace(current);
+        if (opened.ok) {
+          this.programmingMode.setExecute();
+          cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
+          await channel.send(`${opened.message}\nWorkspace IDE mode enabled.`, channelId);
+        } else {
+          await channel.send(opened.message, channelId);
+        }
         return true;
       }
 
       if (rawArgs === 'plan') {
         this.programmingMode.setPlan();
+        if (cliChannel) cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
         await channel.send('Programming mode: **Plan**\nI will explore, analyze, and present a plan before writing any code. Use `/code execute` to switch to execution.', channelId);
         return true;
       }
 
       if (rawArgs === 'execute' || rawArgs === 'exec') {
         this.programmingMode.setExecute();
+        if (cliChannel) cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
         await channel.send('Programming mode: **Execute**\nI will implement the plan step by step, verifying with builds/tests. Use `/code off` to exit.', channelId);
+        return true;
+      }
+
+      if (rawArgs === 'build') {
+        this.programmingMode.setExecute();
+        if (cliChannel) cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
+        await channel.send('Programming mode: **Build**\nExecution mode is active for implementation/build tasks.', channelId);
         return true;
       }
 
       if (rawArgs === 'off' || rawArgs === 'exit') {
         this.programmingMode.setOff();
+        if (cliChannel) cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
         await channel.send('Programming mode: **Off**\nBack to normal conversation mode.', channelId);
         return true;
       }
@@ -1764,11 +1825,81 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
       if (rawArgs === 'toggle') {
         const newState = this.programmingMode.toggle();
         const labels: Record<string, string> = { off: 'Off', plan: 'Plan', execute: 'Execute' };
+        if (cliChannel) cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
         await channel.send(`Programming mode: **${labels[newState]}**`, channelId);
         return true;
       }
 
-      await channel.send('Unknown /code command. Available: /code, /code plan, /code execute, /code off, /code toggle', channelId);
+      await channel.send('Unknown /code command. Available: /code, /code plan, /code execute, /code build, /code workspace, /code off, /code toggle', channelId);
+      return true;
+    }
+
+    if (cmd.startsWith('/ws') || cmd.startsWith('/workspace')) {
+      const cliChannel = channelType === 'cli' && channel instanceof CLIChannel ? channel : null;
+      if (!cliChannel) {
+        await channel.send('Workspace IDE mode is currently available in CLI only.', channelId);
+        return true;
+      }
+
+      const base = cmd.startsWith('/workspace') ? '/workspace' : '/ws';
+      const rawArgs = trimmed.slice(base.length).trim();
+      const rawLower = rawArgs.toLowerCase();
+
+      if (!rawArgs || rawLower === 'status') {
+        const ws = cliChannel.getWorkspace();
+        await channel.send(ws?.active ? `Workspace active: ${ws.rootPath}` : 'No active workspace. Use `/ws open <path>`.', channelId);
+        return true;
+      }
+
+      if (rawLower.startsWith('open ')) {
+        const target = rawArgs.slice(5).trim();
+        const opened = cliChannel.openWorkspace(target);
+        if (opened.ok) {
+          this.capabilities.setCwd(path.resolve(target.replace(/^~(?=$|\/)/, process.env.HOME || '~')));
+          this.capabilities.permissions.addTempScope(this.capabilities.getCwd(), true, true);
+          this.programmingMode.setExecute();
+          this.programmingMode.setProjectContext(this.capabilities.getCwd());
+          cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
+          await channel.send(`${opened.message}\nWorkspace IDE is ready.`, channelId);
+        } else {
+          await channel.send(opened.message, channelId);
+        }
+        return true;
+      }
+
+      if (rawLower === 'refresh') {
+        cliChannel.refreshWorkspace();
+        await channel.send('Workspace refreshed.', channelId);
+        return true;
+      }
+
+      if (rawLower.startsWith('stage ')) {
+        const fileArg = rawArgs.slice(6).trim();
+        const result = cliChannel.stageWorkspaceFile(fileArg || 'all');
+        await channel.send(result.message, channelId);
+        return true;
+      }
+
+      if (rawLower.startsWith('commit ')) {
+        const message = rawArgs.slice(7).trim();
+        const result = cliChannel.commitWorkspace(message);
+        await channel.send(result.message, channelId);
+        return true;
+      }
+
+      if (rawLower.startsWith('undo ')) {
+        const fileArg = rawArgs.slice(5).trim();
+        const result = cliChannel.undoWorkspaceFile(fileArg);
+        await channel.send(result.message, channelId);
+        return true;
+      }
+
+      if (rawLower === 'help') {
+        await channel.send('Workspace commands:\n`/ws open <path>`\n`/ws refresh`\n`/ws stage <file|all>`\n`/ws commit <message>`\n`/ws undo <file>`\n`/ws status`', channelId);
+        return true;
+      }
+
+      await channel.send('Unknown workspace command. Use `/ws help`.', channelId);
       return true;
     }
 
@@ -2160,6 +2291,33 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
     }
 
     return false;
+  }
+
+  private async handleWorkspaceNaturalLanguage(content: string, channelType: string, channelId: string): Promise<boolean> {
+    const channel = this.channels.get(channelType as any);
+    if (!channel || channelType !== 'cli' || !(channel instanceof CLIChannel)) return false;
+
+    const lower = content.toLowerCase();
+    if (!lower.includes('workspace')) return false;
+    if (!(lower.includes('open') || lower.includes('use') || lower.includes('enter'))) return false;
+
+    const pathMatch = content.match(/(?:open|use|workspace)\s+(?:at\s+|in\s+)?([^,.;]+)$/i);
+    const targetRaw = (pathMatch?.[1] || '').trim();
+    const target = targetRaw && !targetRaw.startsWith('workspace') ? targetRaw : this.capabilities.getCwd();
+    const opened = channel.openWorkspace(target);
+    if (!opened.ok) {
+      await channel.send(opened.message, channelId);
+      return true;
+    }
+
+    const resolved = path.resolve(target.replace(/^~(?=$|\/)/, process.env.HOME || '~'));
+    this.capabilities.setCwd(resolved);
+    this.capabilities.permissions.addTempScope(resolved, true, true);
+    this.programmingMode.setExecute();
+    this.programmingMode.setProjectContext(resolved);
+    channel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
+    await channel.send(`Workspace opened from conversation intent: ${resolved}`, channelId);
+    return true;
   }
 
   private async openCliCommandMenu(channel: CLIChannel, channelId: string): Promise<void> {

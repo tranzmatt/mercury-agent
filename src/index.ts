@@ -58,12 +58,11 @@ function hr() {
 }
 
 const MERCURY_ASCII = [
-  '    __  _____________  ________  ________  __',
-  '   /  |/  / ____/ __ \\/ ____/ / / / __ \\/ < /',
-  '  / /|_/ / __/ / /_/ / /   / / / / /_/ /\\  / ',
-  ' / /  / / /___/ _, _/ /___/ /_/ / _, _/ / /  ',
-  '/_/  /_/_____/_/ |_|\\____/\\____/_/ |_| /_/   ',
-].filter(l => l.trim());
+  '      /\\_/\\      ',
+  '    =( o.o )=     ',
+  '      > ^ <       ',
+  '        *         ',
+].filter((l) => l.trim());
 
 function banner() {
   console.log('');
@@ -71,7 +70,8 @@ function banner() {
     console.log(chalk.bold.cyan(`  ${line}`));
   }
   console.log('');
-  console.log(chalk.white('  an AI agent for personal tasks'));
+  console.log(chalk.bold.cyan('  MERCURY'));
+  console.log(chalk.white('  Your soul-driven AI agent'));
   console.log(chalk.dim(`  v${pkgVersion} · by Cosmic Stack · mercury.cosmicstack.org`));
   console.log('');
 }
@@ -82,7 +82,8 @@ function splashScreen() {
     console.log(chalk.bold.cyan(`  ${line}`));
   }
   console.log('');
-  console.log(chalk.dim('  an AI agent for personal tasks'));
+  console.log(chalk.bold.cyan('  MERCURY'));
+  console.log(chalk.dim('  Your soul-driven AI agent'));
   console.log(chalk.cyan('  by Cosmic Stack'));
   console.log(chalk.dim('  mercury.cosmicstack.org'));
   console.log('');
@@ -1424,7 +1425,7 @@ program
 
 program
   .command('doctor')
-  .description('Reconfigure Mercury — change keys, name, settings (Enter to keep current)')
+  .description('Reconfigure Mercury setup (name, providers, channels, permissions defaults)')
   .action(async () => {
     if (isSetupComplete()) {
       await configure(loadConfig());

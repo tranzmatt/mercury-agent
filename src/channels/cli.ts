@@ -1,10 +1,13 @@
 import React from 'react';
 import { render } from 'ink';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execSync } from 'node:child_process';
 import type { ChannelMessage } from '../types/channel.js';
 import { BaseChannel, type PermissionMode } from './base.js';
 import { logger } from '../utils/logger.js';
 import { formatToolStep, formatToolResult } from '../utils/tool-label.js';
-import type { ChatMessage, ToolStep, PermissionPromptState, SidebarSection, SkillInfo, SubAgentInfo, ProviderInfo, TokenInfo, AppMode } from '../ui/types.js';
+import type { ChatMessage, ToolStep, PermissionPromptState, SidebarSection, SkillInfo, SubAgentInfo, ProviderInfo, TokenInfo, AppMode, WorkspaceState, WorkspaceTreeNode, WorkspaceGitFile } from '../ui/types.js';
 import { TuiApp } from '../ui/App.js';
 
 export interface TuiState {
@@ -24,6 +27,7 @@ export interface TuiState {
   programmingMode: import('../core/programming-mode.js').ProgrammingModeState;
   projectContext: string | null;
   permissionMode: PermissionMode;
+  workspace: WorkspaceState | null;
 }
 
 const defaultState: TuiState = {
@@ -43,6 +47,7 @@ const defaultState: TuiState = {
   programmingMode: 'off',
   projectContext: null,
   permissionMode: 'ask-me',
+  workspace: null,
 };
 
 export class CLIChannel extends BaseChannel {
@@ -119,8 +124,36 @@ export class CLIChannel extends BaseChannel {
         this.update({ mode: 'chat' });
         return;
       }
-      if (trimmed === '/code' || trimmed === '/coding') {
+      if (trimmed === '/coding') {
         this.update({ mode: 'coding' });
+        return;
+      }
+      if (trimmed === '/workspace' || trimmed === '/ws') {
+        this.update({ mode: this.state.workspace?.active ? 'workspace' : 'coding' });
+        return;
+      }
+      if (trimmed === '/ws up') {
+        this.moveWorkspaceSelection(-1);
+        return;
+      }
+      if (trimmed === '/ws down') {
+        this.moveWorkspaceSelection(1);
+        return;
+      }
+      if (trimmed === '/ws open-selected') {
+        this.toggleOrSelectWorkspaceNode();
+        return;
+      }
+      if (trimmed === '/ws close-file') {
+        this.closeWorkspaceFile();
+        return;
+      }
+      if (trimmed === '/ws collapse') {
+        this.collapseWorkspaceNode();
+        return;
+      }
+      if (trimmed === '/ws expand') {
+        this.expandWorkspaceNode();
         return;
       }
       if (trimmed === '/menu' || trimmed === '/m') {
@@ -411,6 +444,216 @@ export class CLIChannel extends BaseChannel {
 
   setMode(mode: AppMode): void {
     this.update({ mode });
+  }
+
+  setProgrammingStatus(mode: import('../core/programming-mode.js').ProgrammingModeState, projectContext: string | null): void {
+    this.update({ programmingMode: mode, projectContext });
+  }
+
+  openWorkspace(rawPath: string): { ok: boolean; message: string } {
+    const target = path.resolve(rawPath.replace(/^~(?=$|\/)/, process.env.HOME || '~'));
+    if (!fs.existsSync(target)) return { ok: false, message: `Workspace path does not exist: ${target}` };
+    if (!fs.statSync(target).isDirectory()) return { ok: false, message: `Workspace path is not a directory: ${target}` };
+
+    const workspace = this.buildWorkspaceState(target, undefined, 'Workspace opened');
+    this.update({ workspace, mode: 'workspace', projectContext: target });
+    return { ok: true, message: `Workspace opened: ${target}` };
+  }
+
+  refreshWorkspace(): void {
+    if (!this.state.workspace?.active) return;
+    const selectedPath = this.state.workspace.selectedPath ?? undefined;
+    const workspace = this.buildWorkspaceState(this.state.workspace.rootPath, selectedPath, 'Workspace refreshed');
+    this.update({ workspace });
+  }
+
+  stageWorkspaceFile(filePath: string): { ok: boolean; message: string } {
+    if (!this.state.workspace?.active) return { ok: false, message: 'No active workspace.' };
+    const root = this.state.workspace.rootPath;
+    try {
+      const rel = filePath === 'all' ? '.' : filePath;
+      execSync(`git add ${this.quoteArg(rel)}`, { cwd: root, stdio: 'pipe' });
+      this.refreshWorkspace();
+      return { ok: true, message: rel === '.' ? 'Staged all changes.' : `Staged: ${rel}` };
+    } catch (err: any) {
+      return { ok: false, message: `Stage failed: ${err?.message || String(err)}` };
+    }
+  }
+
+  undoWorkspaceFile(filePath: string): { ok: boolean; message: string } {
+    if (!this.state.workspace?.active) return { ok: false, message: 'No active workspace.' };
+    const root = this.state.workspace.rootPath;
+    try {
+      execSync(`git checkout -- ${this.quoteArg(filePath)}`, { cwd: root, stdio: 'pipe' });
+      this.refreshWorkspace();
+      return { ok: true, message: `Reverted: ${filePath}` };
+    } catch (err: any) {
+      return { ok: false, message: `Undo failed: ${err?.message || String(err)}` };
+    }
+  }
+
+  commitWorkspace(message: string): { ok: boolean; message: string } {
+    if (!this.state.workspace?.active) return { ok: false, message: 'No active workspace.' };
+    const root = this.state.workspace.rootPath;
+    if (!message.trim()) return { ok: false, message: 'Commit message is required.' };
+    const body = `${message.trim()}\n\nCo-authored-by: Mercury <mercury@cosmicstack.org>`;
+    try {
+      execSync(`git commit -m ${this.quoteArg(body)}`, { cwd: root, stdio: 'pipe' });
+      this.refreshWorkspace();
+      return { ok: true, message: 'Commit created with Mercury co-author.' };
+    } catch (err: any) {
+      return { ok: false, message: `Commit failed: ${err?.message || String(err)}` };
+    }
+  }
+
+  getWorkspace(): WorkspaceState | null {
+    return this.state.workspace;
+  }
+
+  private quoteArg(v: string): string {
+    return `'${v.replace(/'/g, `'\\''`)}'`;
+  }
+
+  private moveWorkspaceSelection(delta: number): void {
+    if (!this.state.workspace?.active) return;
+    const next = Math.max(0, Math.min(this.state.workspace.nodes.length - 1, this.state.workspace.selectedIndex + delta));
+    const node = this.state.workspace.nodes[next];
+    this.update({
+      workspace: {
+        ...this.state.workspace,
+        selectedIndex: next,
+        selectedPath: node?.path || null,
+      },
+    });
+  }
+
+  private toggleOrSelectWorkspaceNode(): void {
+    const ws = this.state.workspace;
+    if (!ws?.active) return;
+    const node = ws.nodes[ws.selectedIndex];
+    if (!node) return;
+    if (!node.isDir) {
+      const preview = this.readFilePreview(node.path);
+      this.update({ workspace: { ...ws, selectedPath: node.path, openedFilePath: node.path, openedFilePreview: preview, lastAction: `Opened file: ${node.path}` } });
+      return;
+    }
+    const expanded = !node.expanded;
+    this.rebuildWorkspaceWithExpansion(node.path, expanded);
+  }
+
+  private collapseWorkspaceNode(): void {
+    const ws = this.state.workspace;
+    if (!ws?.active) return;
+    const node = ws.nodes[ws.selectedIndex];
+    if (!node?.isDir) return;
+    if (!node.expanded) return;
+    this.rebuildWorkspaceWithExpansion(node.path, false);
+  }
+
+  private expandWorkspaceNode(): void {
+    const ws = this.state.workspace;
+    if (!ws?.active) return;
+    const node = ws.nodes[ws.selectedIndex];
+    if (!node?.isDir) return;
+    if (node.expanded) return;
+    this.rebuildWorkspaceWithExpansion(node.path, true);
+  }
+
+  private rebuildWorkspaceWithExpansion(nodePath: string, expand: boolean): void {
+    const ws = this.state.workspace;
+    if (!ws) return;
+    const expandedSet = new Set(ws.nodes.filter((n) => n.isDir && n.expanded).map((n) => n.path));
+    if (expand) expandedSet.add(nodePath);
+    else expandedSet.delete(nodePath);
+    const workspace = this.buildWorkspaceState(ws.rootPath, ws.selectedPath || undefined, ws.lastAction, expandedSet);
+    this.update({ workspace });
+  }
+
+  private buildWorkspaceState(rootPath: string, selectedPath?: string, lastAction = '', preExpanded?: Set<string>): WorkspaceState {
+    const expanded = preExpanded || new Set<string>([rootPath]);
+    const nodes = this.buildTreeNodes(rootPath, expanded, 0);
+    const selectedIndex = Math.max(0, nodes.findIndex((n) => n.path === selectedPath));
+    const selectedNode = nodes[selectedIndex] || nodes[0] || null;
+    const { files, branch, stagedCount, unstagedCount } = this.readGitState(rootPath);
+    return {
+      active: true,
+      rootPath,
+      nodes,
+      selectedIndex,
+      selectedPath: selectedNode?.path || null,
+      openedFilePath: this.state.workspace?.openedFilePath || null,
+      openedFilePreview: this.state.workspace?.openedFilePreview || [],
+      gitFiles: files,
+      stagedCount,
+      unstagedCount,
+      branch,
+      lastAction,
+    };
+  }
+
+  closeWorkspaceFile(): void {
+    const ws = this.state.workspace;
+    if (!ws?.active) return;
+    this.update({ workspace: { ...ws, openedFilePath: null, openedFilePreview: [], lastAction: 'Closed file preview' } });
+  }
+
+  private readFilePreview(filePath: string): string[] {
+    try {
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      return raw.split('\n').slice(0, 80);
+    } catch {
+      return ['(Unable to read file preview)'];
+    }
+  }
+
+  private buildTreeNodes(dir: string, expanded: Set<string>, depth: number): WorkspaceTreeNode[] {
+    const nodes: WorkspaceTreeNode[] = [];
+    const id = `${dir}:${depth}`;
+    const isExpanded = expanded.has(dir);
+    nodes.push({ id, name: depth === 0 ? path.basename(dir) || dir : path.basename(dir), path: dir, depth, isDir: true, expanded: isExpanded });
+    if (!isExpanded) return nodes;
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return nodes;
+    }
+    const sorted = entries
+      .filter((e) => e.name !== '.git' && e.name !== 'node_modules')
+      .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
+    for (const entry of sorted.slice(0, 200)) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        nodes.push(...this.buildTreeNodes(full, expanded, depth + 1));
+      } else {
+        nodes.push({ id: `${full}:${depth + 1}`, name: entry.name, path: full, depth: depth + 1, isDir: false });
+      }
+    }
+    return nodes;
+  }
+
+  private readGitState(rootPath: string): { files: WorkspaceGitFile[]; branch: string; stagedCount: number; unstagedCount: number } {
+    try {
+      const branch = execSync('git branch --show-current', { cwd: rootPath, stdio: 'pipe' }).toString().trim() || 'detached';
+      const out = execSync('git status --porcelain', { cwd: rootPath, stdio: 'pipe' }).toString();
+      const files: WorkspaceGitFile[] = out
+        .split('\n')
+        .map((line) => line.trimEnd())
+        .filter(Boolean)
+        .map((line) => {
+          const x = line[0] || ' ';
+          const y = line[1] || ' ';
+          const rel = line.slice(3).trim();
+          const staged = x !== ' ' && x !== '?';
+          const status = `${x}${y}`.trim() || '??';
+          return { path: rel, staged, status };
+        });
+      const stagedCount = files.filter((f) => f.staged).length;
+      const unstagedCount = files.length - stagedCount;
+      return { files, branch, stagedCount, unstagedCount };
+    } catch {
+      return { files: [], branch: 'not-a-git-repo', stagedCount: 0, unstagedCount: 0 };
+    }
   }
 
   initSplash(agentName: string, version: string): void {
