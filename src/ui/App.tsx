@@ -502,6 +502,7 @@ function StatusBarView({ state }: { state: TuiState }) {
     tokenBar = `[${'█'.repeat(filled)}${'░'.repeat(20 - filled)}] ${state.tokenInfo.percentage}%`;
   }
   const providerBadge = state.provider ? `⚡ ${state.provider.name} · ${state.provider.model}` : '⚡ No provider';
+  const viewLabel = state.viewMode === 'balanced' ? 'minimal' : 'detailed';
 
   return (
     <Box flexDirection="column">
@@ -516,7 +517,7 @@ function StatusBarView({ state }: { state: TuiState }) {
           <Text bold color="cyan">{state.agentName}</Text>
           {state.programmingMode !== 'off' && <Text> <Text color={modeColor} bold>{modeLabel}</Text></Text>}
           {state.projectContext && <Text> <Text color="gray">|</Text> <Text color="blue">{state.projectContext}</Text></Text>}
-          <Text> <Text color="gray">|</Text> <Text color="yellow">View: {state.viewMode}</Text></Text>
+          <Text> <Text color="gray">|</Text> <Text color="yellow">View: {viewLabel}</Text></Text>
           <Text> <Text color="gray">|</Text> <Text color="green">{state.permissionMode === 'allow-all' ? '🔓' : '🔒'}</Text></Text>
         </Box>
         <Text color="magenta">{providerBadge}</Text>
@@ -744,12 +745,12 @@ function ChatMessagesView({ messages, agentName }: { messages: ChatMessage[]; ag
 }
 
 function ToolStepsView({ steps, viewMode }: { steps: ToolStep[]; viewMode: 'balanced' | 'detailed' }) {
-  const visible = viewMode === 'detailed' ? steps.slice(-20) : steps.slice(-6);
+  const visible = viewMode === 'detailed' ? steps.slice(-20) : steps.slice(-1);
   const runningCount = visible.filter((s) => s.status === 'running').length;
   const doneCount = visible.filter((s) => s.status === 'done').length;
   return (
     <Box flexDirection="column" marginLeft={2} marginTop={1}>
-      <Text color="gray">Activity · {viewMode} · {runningCount > 0 ? `${runningCount} running` : `${doneCount} completed`}</Text>
+      <Text color="gray">Activity · {viewMode === 'balanced' ? 'minimal' : 'detailed'} · {runningCount > 0 ? `${runningCount} running` : `${doneCount} completed`}</Text>
       {visible.map((step) => (
         <Box key={step.id}>
           <Text>
@@ -759,10 +760,10 @@ function ToolStepsView({ steps, viewMode }: { steps: ToolStep[]; viewMode: 'bala
           <Text dimColor>{step.label}</Text>
           {step.status === 'running' && <Text color="yellow"> …</Text>}
           {step.status === 'done' && step.elapsed != null && <Text dimColor> ({step.elapsed.toFixed(1)}s)</Text>}
-          {(viewMode === 'detailed' || step.status === 'done') && step.result && <Text dimColor> · {step.result}</Text>}
+          {viewMode === 'detailed' && step.result && <Text dimColor> · {step.result}</Text>}
         </Box>
       ))}
-      <Text dimColor>Press V to toggle Balanced/Detailed</Text>
+      <Text dimColor>Press V to toggle Minimal/Detailed</Text>
     </Box>
   );
 }
