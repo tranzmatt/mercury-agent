@@ -172,11 +172,6 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   useInput((ch, key) => {
     const keyChar = (ch || (key as any)?.name || '').toLowerCase();
 
-    if (ch === '\u0003' || (key.ctrl && ((key as any).name === 'c' || ch?.toLowerCase?.() === 'c'))) {
-      onExit();
-      return;
-    }
-
     if (state.mode === 'splash') {
       if (ch === 'd' || ch === 'D') {
         setShowStartupDetails((v) => !v);
@@ -339,7 +334,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
 
     if (state.mode === 'splash') return;
 
-    if ((ch === 'v' || ch === 'V') && !state.permissionPrompt && input.length === 0) {
+    if (key.ctrl && (ch === 'v' || ch === 'V') && !state.permissionPrompt) {
       onInput('/view toggle');
       return;
     }
@@ -784,7 +779,6 @@ function ChatMessagesView({ messages, agentName }: { messages: ChatMessage[]; ag
           <Box key={msg.id} flexDirection="column" marginBottom={1}>
             <Box>
               <Text bold color={roleColor}>{prefix}:</Text>
-              {msg.streaming && <Text dimColor> (streaming...)</Text>}
             </Box>
             <Box marginLeft={2} flexDirection="column">
               <Text>{rendered}</Text>
