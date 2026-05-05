@@ -97,6 +97,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     '/memory',
     '/agents',
     '/bg',
+    '/bg current',
     '/bg list',
     '/bg cancel ',
     '/bg clear',
@@ -344,7 +345,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     }
 
     if (key.ctrl && (ch === 'b' || ch === 'B') && !state.permissionPrompt) {
-      onInput('/bg list');
+      onInput(state.isThinking ? '/bg current' : '/bg list');
       return;
     }
 

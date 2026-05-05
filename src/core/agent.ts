@@ -255,6 +255,8 @@ export class Agent {
   private messageQueue: ChannelMessage[] = [];
   private processing = false;
   private telegramStreaming: boolean;
+  private currentMessage: ChannelMessage | null = null;
+  private currentAbort: AbortController | null = null;
   private supervisor?: import('../core/supervisor.js').SubAgentSupervisor;
   readonly programmingMode: ProgrammingMode;
   private spotifyClient?: SpotifyClient;
@@ -390,7 +392,7 @@ export class Agent {
       const agentList = activeAgents.map(a => `**${a.id}**: ${a.task.slice(0, 40)}`).join(', ');
       await channel.send(`I'm busy working on sub-agent tasks (${agentList}). Your message has been queued — I'll respond once I'm free. Use /agents to check status.`, msg.channelId);
     } else {
-      await channel.send("I'm busy processing. Your message has been queued — I'll respond once I'm free.", msg.channelId);
+      await channel.send("I'm busy processing. Use /bg current to move this task to the background, or wait for it to finish.", msg.channelId);
     }
 
     this.messageQueue.push(msg);
@@ -443,6 +445,35 @@ export class Agent {
     const parts = trimmed.split(/\s+/);
     const sub = parts.length > 1 ? parts[1] : '';
     const args = parts.slice(1).join(' ');
+
+    if (sub === 'current') {
+      if (!this.processing || !this.currentMessage) {
+        await channel.send('No active task to background.', msg.channelId);
+        return;
+      }
+      const taskDescription = this.currentMessage.content.trim();
+      const sourceChannelId = this.currentMessage.channelId;
+      const sourceChannelType = this.currentMessage.channelType as any;
+
+      if (this.currentAbort) {
+        this.currentAbort.abort();
+      }
+
+      if (this.supervisor) {
+        const agentId = await this.supervisor.spawn({
+          task: taskDescription,
+          sourceChannelId,
+          sourceChannelType,
+        });
+        const bgId = this.backgroundTasks.spawnAgent(taskDescription, this.capabilities.getCwd(), agentId);
+        await channel.send(`📋 Active task moved to background as ${bgId}. I'll notify you when it completes.`, msg.channelId);
+      } else {
+        await channel.send('Cannot background: sub-agents not available. The active task has been aborted.', msg.channelId);
+      }
+
+      this.syncBgTasksToTui();
+      return;
+    }
 
     if (sub === 'list' || sub === '' || sub === 'ls') {
       const tasks = this.backgroundTasks.getAllSummaries();
@@ -542,7 +573,7 @@ export class Agent {
 
     const command = args || '';
     if (!command) {
-      await channel.send('Usage:\n• /bg <command> — run a shell command in the background\n• /bg: <task> — delegate an LLM task to the background\n• /bg list — show all background tasks\n• /bg <id> — show task details\n• /bg cancel <id> — cancel a running task\n• /bg clear — prune completed tasks', msg.channelId);
+      await channel.send('Usage:\n• /bg <command> — run a shell command in the background\n• /bg: <task> — delegate an LLM task to the background\n• /bg current — move the active task to the background\n• /bg list — show all background tasks\n• /bg <id> — show task details\n• /bg cancel <id> — cancel a running task\n• /bg clear — prune completed tasks', msg.channelId);
       return;
     }
 
@@ -834,6 +865,9 @@ export class Agent {
       const loopDetector = new ToolCallLoopDetector();
       const loopAbortController = new AbortController();
       let loopWarningSent = false;
+
+      this.currentMessage = msg;
+      this.currentAbort = loopAbortController;
 
       const canStream = msg.channelType === 'cli' || (msg.channelType === 'telegram' && this.telegramStreaming);
 
@@ -1243,6 +1277,8 @@ export class Agent {
       logger.error({ err }, 'Error handling message');
       this.lifecycle.transition('idle');
     } finally {
+      this.currentMessage = null;
+      this.currentAbort = null;
       if (isInternal || isScheduled) {
         this.capabilities.permissions.setAutoApproveAll(false);
       }
