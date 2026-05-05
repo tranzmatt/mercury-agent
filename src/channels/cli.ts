@@ -7,7 +7,7 @@ import type { ChannelMessage } from '../types/channel.js';
 import { BaseChannel, type PermissionMode } from './base.js';
 import { logger } from '../utils/logger.js';
 import { formatToolStep, formatToolResult } from '../utils/tool-label.js';
-import type { ChatMessage, ToolStep, PermissionPromptState, SidebarSection, SkillInfo, SubAgentInfo, ProviderInfo, TokenInfo, AppMode, WorkspaceState, WorkspaceTreeNode, WorkspaceGitFile } from '../ui/types.js';
+import type { ChatMessage, ToolStep, PermissionPromptState, SidebarSection, SkillInfo, SubAgentInfo, ProviderInfo, TokenInfo, AppMode, WorkspaceState, WorkspaceTreeNode, WorkspaceGitFile, BackgroundTaskInfo } from '../ui/types.js';
 import { TuiApp } from '../ui/App.js';
 
 export interface TuiState {
@@ -28,6 +28,7 @@ export interface TuiState {
   projectContext: string | null;
   permissionMode: PermissionMode;
   workspace: WorkspaceState | null;
+  backgroundTasks: BackgroundTaskInfo[];
 }
 
 const defaultState: TuiState = {
@@ -48,6 +49,7 @@ const defaultState: TuiState = {
   projectContext: null,
   permissionMode: 'ask-me',
   workspace: null,
+  backgroundTasks: [],
 };
 
 export class CLIChannel extends BaseChannel {
@@ -436,6 +438,10 @@ export class CLIChannel extends BaseChannel {
 
   setSubAgents(agents: SubAgentInfo[]): void {
     this.update({ subAgents: agents });
+  }
+
+  updateBackgroundTasks(tasks: BackgroundTaskInfo[]): void {
+    this.update({ backgroundTasks: tasks });
   }
 
   setSidebarSections(sections: SidebarSection[]): void {

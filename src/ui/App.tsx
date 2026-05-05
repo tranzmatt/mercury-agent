@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import type { TuiState } from '../channels/cli.js';
-import type { AppMode, ChatMessage, ToolStep, SubAgentInfo, PermissionPromptState, SidebarSection } from './types.js';
+import type { AppMode, ChatMessage, ToolStep, SubAgentInfo, PermissionPromptState, SidebarSection, BackgroundTaskInfo } from './types.js';
 import type { PermissionMode } from '../channels/base.js';
 import type { ProgrammingModeState } from '../core/programming-mode.js';
 import { renderMarkdown } from '../utils/markdown.js';
@@ -96,6 +96,10 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     '/permissions',
     '/memory',
     '/agents',
+    '/bg',
+    '/bg list',
+    '/bg cancel ',
+    '/bg clear',
     '/view',
     '/view balanced',
     '/view detailed',
@@ -334,8 +338,13 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
 
     if (state.mode === 'splash') return;
 
-    if ((ch === 'v' || ch === 'V') && !state.permissionPrompt) {
+    if ((ch === 'v' || ch === 'V') && !state.permissionPrompt && input.length === 0) {
       onInput('/view toggle');
+      return;
+    }
+
+    if (key.ctrl && (ch === 'b' || ch === 'B') && !state.permissionPrompt) {
+      onInput('/bg list');
       return;
     }
 
@@ -463,11 +472,12 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     );
   }
 
-  const showInput = !state.permissionPrompt && !state.isThinking && (state.mode === 'chat' || state.mode === 'coding' || state.mode === 'workspace');
+  const showInput = !state.permissionPrompt && (state.mode === 'chat' || state.mode === 'coding' || state.mode === 'workspace');
 
   return (
     <Box flexDirection="column" flexGrow={1}>
       <StatusBarView state={state} />
+      {state.backgroundTasks.length > 0 && <BackgroundBarView tasks={state.backgroundTasks} />}
       {state.mode === 'spotify' ? <SpotifyBody activeIdx={spotifyIdx} nowPlaying={spotifyNow} /> : null}
       {state.mode === 'menu' ? <MenuBody menuIdx={menuIdx} /> : null}
       {state.mode === 'coding' ? <CodingBody state={state} /> : null}
@@ -489,6 +499,39 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
           ))}
         </Box>
       )}
+    </Box>
+  );
+}
+
+function BackgroundBarView({ tasks }: { tasks: BackgroundTaskInfo[] }) {
+  if (tasks.length === 0) return null;
+
+  const statusIcons: Record<string, string> = {
+    running: '⏳',
+    completed: '✅',
+    failed: '❌',
+    timed_out: '⏱',
+    cancelled: '⛔',
+  };
+
+  const visible = tasks.slice(0, 3);
+  const more = tasks.length > 3 ? ` +${tasks.length - 3} more` : '';
+
+  return (
+    <Box paddingX={1} paddingBottom={0}>
+      <Text color="gray">{'─'.repeat(50)}</Text>
+      <Box flexDirection="column" width="100%">
+        <Box>
+          <Text dimColor>⏥ Background:</Text>
+          <Text> {visible.map((t) => {
+            const icon = statusIcons[t.status] || '·';
+            const label = t.command || t.task || t.id;
+            const short = label.length > 25 ? label.slice(0, 22) + '...' : label;
+            const elapsed = t.runningMs ? ` (${Math.round(t.runningMs / 1000)}s)` : '';
+            return `${icon} ${t.id}: ${short}${elapsed}`;
+          }).join(' · ')}{more}</Text>
+        </Box>
+      </Box>
     </Box>
   );
 }

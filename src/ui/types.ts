@@ -108,6 +108,22 @@ export interface MercuryAppState {
   workspace: WorkspaceState | null;
 }
 
+export type BgTaskType = 'shell' | 'agent';
+export type BgTaskStatus = 'running' | 'completed' | 'failed' | 'timed_out' | 'cancelled';
+
+export interface BackgroundTaskInfo {
+  id: string;
+  type: BgTaskType;
+  command?: string;
+  task?: string;
+  status: BgTaskStatus;
+  startedAt: number;
+  completedAt?: number;
+  exitCode: number | null;
+  outputPreview: string;
+  runningMs?: number;
+}
+
 export interface PermissionPromptState {
   type: 'mode' | 'ask' | 'continue';
   message: string;

@@ -14,6 +14,7 @@ import { DeepSeekProvider } from '../providers/deepseek.js';
 import { Lifecycle } from './lifecycle.js';
 import { Scheduler } from './scheduler.js';
 import { ProgrammingMode } from './programming-mode.js';
+import { BackgroundTaskManager } from './background-tasks.js';
 import { logger } from '../utils/logger.js';
 import { CLIChannel } from '../channels/cli.js';
 import { TelegramChannel } from '../channels/telegram.js';
@@ -257,6 +258,7 @@ export class Agent {
   private supervisor?: import('../core/supervisor.js').SubAgentSupervisor;
   readonly programmingMode: ProgrammingMode;
   private spotifyClient?: SpotifyClient;
+  readonly backgroundTasks: BackgroundTaskManager;
 
   constructor(
     private config: MercuryConfig,
@@ -276,6 +278,11 @@ export class Agent {
     this.capabilities = capabilities;
     this.telegramStreaming = config.channels.telegram.streaming ?? true;
     this.programmingMode = new ProgrammingMode();
+    this.backgroundTasks = new BackgroundTaskManager();
+
+    this.backgroundTasks.onGlobalComplete((task) => {
+      this.notifyBackgroundTaskComplete(task);
+    });
 
     this.scheduler.setOnScheduledTask(async (manifest) => this.handleScheduledTask(manifest));
 
@@ -354,8 +361,13 @@ export class Agent {
       return;
     }
 
+    if (trimmed.startsWith('/bg')) {
+      await this.handleBgCommand(trimmed, msg, channel);
+      return;
+    }
+
     if (trimmed === '/help') {
-      await channel.send('Agent is busy. Available: /agents, /halt, /stop, /spotify, /code, /memory', msg.channelId);
+      await channel.send('Agent is busy. Available: /agents, /halt, /stop, /spotify, /code, /memory, /bg', msg.channelId);
       return;
     }
 
@@ -425,6 +437,161 @@ export class Agent {
       return;
     }
     await channel.send('Agent is busy. Programming mode changes will be available after current task completes.', msg.channelId);
+  }
+
+  private async handleBgCommand(trimmed: string, msg: ChannelMessage, channel: any): Promise<void> {
+    const parts = trimmed.split(/\s+/);
+    const sub = parts.length > 1 ? parts[1] : '';
+    const args = parts.slice(1).join(' ');
+
+    if (sub === 'list' || sub === '' || sub === 'ls') {
+      const tasks = this.backgroundTasks.getAllSummaries();
+      if (tasks.length === 0) {
+        await channel.send('No background tasks.', msg.channelId);
+        return;
+      }
+      const lines = tasks.map((t) => {
+        const icon = t.status === 'running' ? '⏳' : t.status === 'completed' ? '✅' : t.status === 'failed' ? '❌' : t.status === 'timed_out' ? '⏱' : '⛔';
+        const label = t.command || t.task || t.id;
+        const elapsed = t.runningMs ? ` (${Math.round(t.runningMs / 1000)}s)` : t.completedAt ? ` (${((t.completedAt - t.startedAt) / 1000).toFixed(1)}s)` : '';
+        const short = label.length > 60 ? label.slice(0, 57) + '...' : label;
+        return `${icon} ${t.id}: ${short}${elapsed} — ${t.status}`;
+      });
+      await channel.send(`**Background Tasks:**\n${lines.join('\n')}\n\nUse /bg <id> for details, /bg cancel <id> to cancel, /bg clear to prune completed tasks.`, msg.channelId);
+      return;
+    }
+
+    if (sub === 'clear') {
+      const cleared = this.backgroundTasks.clearCompleted();
+      await channel.send(`Cleared ${cleared} completed task(s).`, msg.channelId);
+      this.syncBgTasksToTui();
+      return;
+    }
+
+    if (sub === 'cancel') {
+      const taskId = parts[2];
+      if (!taskId) {
+        await channel.send('Usage: /bg cancel <id>', msg.channelId);
+        return;
+      }
+      const cancelled = this.backgroundTasks.cancel(taskId);
+      if (cancelled) {
+        await channel.send(`⛔ Cancelled background task ${taskId}.`, msg.channelId);
+      } else {
+        await channel.send(`Task ${taskId} not found or not running.`, msg.channelId);
+      }
+      this.syncBgTasksToTui();
+      return;
+    }
+
+    const specificTask = this.backgroundTasks.getSummary(sub);
+    if (specificTask) {
+      const task = this.backgroundTasks.get(sub)!;
+      const label = task.command || task.task || task.id;
+      const elapsed = task.status === 'running'
+        ? `Running for ${Math.round((Date.now() - task.startedAt) / 1000)}s`
+        : task.completedAt
+          ? `Completed in ${((task.completedAt - task.startedAt) / 1000).toFixed(1)}s`
+          : task.status;
+      const output = (task.stdout + '\n' + task.stderr).trim();
+      const preview = output.length > 2000 ? output.slice(-2000) : output;
+      await channel.send(`**${specificTask.id}**: ${label}\nStatus: ${elapsed}\nExit code: ${task.exitCode ?? 'N/A'}\n\n${preview || '(no output)'}`, msg.channelId);
+      return;
+    }
+
+    const colonIdx = trimmed.indexOf(':');
+    if (sub.startsWith('cancel')) {
+      const taskId2 = parts[2];
+      if (!taskId2) {
+        await channel.send('Usage: /bg cancel <id>', msg.channelId);
+        return;
+      }
+      const cancelled = this.backgroundTasks.cancel(taskId2);
+      if (cancelled) {
+        await channel.send(`⛔ Cancelled background task ${taskId2}.`, msg.channelId);
+      } else {
+        await channel.send(`Task ${taskId2} not found or not running.`, msg.channelId);
+      }
+      this.syncBgTasksToTui();
+      return;
+    }
+
+    if (colonIdx !== -1 && trimmed[colonIdx + 1] === ' ') {
+      const taskDescription = trimmed.slice(colonIdx + 1).trim();
+      if (!taskDescription) {
+        await channel.send('Usage: /bg: <natural language task> or /bg <shell command>', msg.channelId);
+        return;
+      }
+      if (!this.supervisor) {
+        await channel.send('Sub-agents are not available. Use /bg <command> for shell commands.', msg.channelId);
+        return;
+      }
+      const agentId = await this.supervisor.spawn({
+        task: taskDescription,
+        sourceChannelId: msg.channelId,
+        sourceChannelType: msg.channelType as any,
+      });
+      const bgId = this.backgroundTasks.spawnAgent(taskDescription, this.capabilities.getCwd(), agentId);
+      this.backgroundTasks.registerComplete(bgId, (task) => {
+        if (task.status === 'running') return;
+      });
+      await channel.send(`📋 Background agent ${bgId} started: "${taskDescription.slice(0, 50)}${taskDescription.length > 50 ? '...' : ''}"`, msg.channelId);
+      this.syncBgTasksToTui();
+      return;
+    }
+
+    const command = args || '';
+    if (!command) {
+      await channel.send('Usage:\n• /bg <command> — run a shell command in the background\n• /bg: <task> — delegate an LLM task to the background\n• /bg list — show all background tasks\n• /bg <id> — show task details\n• /bg cancel <id> — cancel a running task\n• /bg clear — prune completed tasks', msg.channelId);
+      return;
+    }
+
+    const cwd = this.capabilities.getCwd();
+    const bgId = this.backgroundTasks.spawnShell(command, cwd);
+    await channel.send(`📋 Background task ${bgId} started: "${command.slice(0, 50)}${command.length > 50 ? '...' : ''}"`, msg.channelId);
+    this.syncBgTasksToTui();
+  }
+
+  private syncBgTasksToTui(): void {
+    const cliChannel = this.channels.get('cli');
+    if (cliChannel && cliChannel instanceof CLIChannel) {
+      (cliChannel as CLIChannel).updateBackgroundTasks(this.backgroundTasks.getAllSummaries());
+    }
+  }
+
+  private notifyBackgroundTaskComplete(task: import('./background-tasks.js').BackgroundTask): void {
+    const label = task.command || task.task || task.id;
+    const duration = task.completedAt ? ` in ${((task.completedAt - task.startedAt) / 1000).toFixed(1)}s` : '';
+    let message: string;
+
+    if (task.status === 'completed') {
+      message = `✅ Background task ${task.id} completed${duration}: "${label}"`;
+    } else if (task.status === 'failed') {
+      message = `❌ Background task ${task.id} failed${duration}: "${label}" (exit code ${task.exitCode ?? 'unknown'})`;
+    } else if (task.status === 'timed_out') {
+      message = `⏱ Background task ${task.id} timed out: "${label}"`;
+    } else if (task.status === 'cancelled') {
+      message = `⛔ Background task ${task.id} cancelled: "${label}"`;
+    } else {
+      message = `Background task ${task.id}: ${task.status} — "${label}"`;
+    }
+
+    const output = (task.stdout + '\n' + task.stderr).trim();
+    if (output) {
+      const preview = output.length > 500 ? '\n' + output.slice(-500) : '\n' + output;
+      message += preview;
+    }
+
+    const cliCh = this.channels.get('cli');
+    if (cliCh) {
+      (cliCh as CLIChannel).send(message).catch(() => {});
+    }
+    const tgCh = this.channels.get('telegram');
+    if (tgCh) {
+      tgCh.send(message).catch(() => {});
+    }
+
+    this.syncBgTasksToTui();
   }
 
   private async processQueue(): Promise<void> {
@@ -1456,6 +1623,12 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
 
     if (cmd === '/help') {
       await channel.send(ctx.manual(), channelId);
+      return true;
+    }
+
+    if (cmd.startsWith('/bg')) {
+      const args = trimmed.slice('/bg'.length).trim();
+      await this.handleBgCommand(args, { content: trimmed, channelId, channelType: channelType as any, id: Date.now().toString(36), senderId: 'user', timestamp: Date.now() }, channel);
       return true;
     }
 
