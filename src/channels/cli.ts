@@ -296,7 +296,7 @@ export class CLIChannel extends BaseChannel {
     for await (const chunk of content) {
       full += chunk;
       const now = Date.now();
-      if (now - lastRender >= 50) {
+      if (now - lastRender >= 16) {
         this.update({
           chatMessages: this.state.chatMessages.map((m) =>
             m.id === msgId ? { ...m, content: full, streaming: true } : m,

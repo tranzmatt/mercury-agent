@@ -765,13 +765,21 @@ function SpotifyBody({ activeIdx, nowPlaying }: { activeIdx: number; nowPlaying:
 
 function ChatMessagesView({ messages, agentName }: { messages: ChatMessage[]; agentName: string }) {
   if (messages.length === 0) return null;
-  const visible = messages.slice(-200);
+  const visible = messages.slice(-50);
+  const cache = React.useRef<Map<string, string>>(new Map());
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1}>
       {visible.map((msg) => {
         const roleColor = msg.role === 'user' ? 'yellow' : msg.role === 'system' ? 'gray' : 'cyan';
         const prefix = msg.role === 'user' ? 'You' : msg.role === 'system' ? 'System' : agentName;
-        const rendered = renderMarkdown(msg.content);
+        let rendered: string;
+        if (msg.streaming) {
+          rendered = renderMarkdown(msg.content);
+          cache.current.set(msg.id, rendered);
+        } else {
+          rendered = cache.current.get(msg.id) ?? renderMarkdown(msg.content);
+          cache.current.set(msg.id, rendered);
+        }
         return (
           <Box key={msg.id} flexDirection="column" marginBottom={1}>
             <Box>
