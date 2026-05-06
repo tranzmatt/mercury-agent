@@ -5,6 +5,16 @@ title: Provider Fallback
 
 Configure multiple LLM providers. Mercury tries them in order and falls back automatically. When a provider fails, Mercury tries the next one and remembers the last successful provider.
 
+## Session Model Switching
+
+You can switch the active provider/model at runtime without restarting Mercury:
+
+- `/models` — shows configured providers and current active model
+- `/models use <provider>` — switches the active session model
+- `/models doctor` — points to setup flow for adding/configuring providers
+
+This is a session-level switch for the running process. Use `mercury doctor` to change persisted defaults.
+
 ## Supported Providers
 
 | Provider | Default Model | API Key | Configuration |

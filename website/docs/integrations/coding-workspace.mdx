@@ -1,0 +1,55 @@
+---
+id: coding-workspace
+title: Coding Workspace (IDE Mode)
+---
+
+Mercury includes a CLI IDE-style workspace mode for repository-focused coding.
+
+## Enter Workspace Mode
+
+You can enter workspace mode in multiple ways:
+
+- `/code` and choose workspace
+- `/code workspace`
+- `/ws open <path>`
+
+Once active, Mercury switches to coding context for that repository.
+
+## Modes
+
+Use programming modes to control behavior:
+
+- `/code plan` — analysis/planning first, minimal code changes
+- `/code execute` — implementation mode
+- `/code off` — return to normal conversation behavior
+
+### Keyboard shortcuts (CLI)
+
+- `Ctrl+P` → Plan mode
+- `Ctrl+X` → Execute mode
+- `Esc` or `Ctrl+Q` → Exit workspace back to chat
+- `Ctrl+E` → Explorer pane
+- `Ctrl+G` → Git pane
+
+## Workspace Commands
+
+| Command | Description |
+|---------|-------------|
+| `/ws open <path>` | Open a directory in workspace mode |
+| `/ws refresh` | Refresh file tree + git status |
+| `/ws stage <file\|all>` | Stage one file or all changes |
+| `/ws commit <message>` | Commit staged changes |
+| `/ws undo <file>` | Revert file changes |
+| `/ws exit` | Exit workspace mode back to general chat |
+
+## Sub-Agents + Background in Coding
+
+Workspace mode supports explicit delegation and backgrounding:
+
+- `/code agent <task>` — delegate coding work to a sub-agent
+- `/bg current` — move active in-flight work to background
+- `/bg list` — inspect all background tasks (shell + sub-agent)
+- `/bg <id>` — view task details/output
+- `/bg cancel <id>` — cancel running background work
+
+This lets you continue coding/chatting while long operations run asynchronously.

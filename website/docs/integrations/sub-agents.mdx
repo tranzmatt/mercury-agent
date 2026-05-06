@@ -50,6 +50,10 @@ Mercury: I've delegated both tasks to parallel agents. Agent a1 is building the 
 | Command | Description |
 |---------|-------------|
 | `/agents` | List all sub-agents (running and completed) |
+| `/code agent <task>` | Delegate a coding task to a sub-agent immediately |
+| `/bg: <task>` | Run a natural-language sub-agent task in background |
+| `/bg current` | Move current in-flight task to a background sub-agent |
+| `/bg list` | List shell + sub-agent background tasks |
 | `/halt` | Emergency: halt all sub-agents and clear the task queue |
 | `/stop` | Full reset: halt agents, clear queue, release locks, clear task board |
 
@@ -133,6 +137,8 @@ If you send `/agents`, you'll see the full status:
 🔄 a1: Build REST API endpoints — running (Using: read_file)
 ⏳ a2: Write integration tests — pending
 ```
+
+Background-tracked agent tasks also appear in `/bg list` so shell jobs and delegated coding work share one progress surface.
 
 ## Configuration
 

@@ -58,12 +58,11 @@ function hr() {
 }
 
 const MERCURY_ASCII = [
-  '    __  _____________  ________  ________  __',
-  '   /  |/  / ____/ __ \\/ ____/ / / / __ \\/ < /',
-  '  / /|_/ / __/ / /_/ / /   / / / / /_/ /\\  / ',
-  ' / /  / / /___/ _, _/ /___/ /_/ / _, _/ / /  ',
-  '/_/  /_/_____/_/ |_|\\____/\\____/_/ |_| /_/   ',
-].filter(l => l.trim());
+  '      /\\_/\\      ',
+  '    =( o.o )=     ',
+  '      > ^ <       ',
+  '        *         ',
+].filter((l) => l.trim());
 
 function banner() {
   console.log('');
@@ -71,7 +70,8 @@ function banner() {
     console.log(chalk.bold.cyan(`  ${line}`));
   }
   console.log('');
-  console.log(chalk.white('  an AI agent for personal tasks'));
+  console.log(chalk.bold.cyan('  MERCURY'));
+  console.log(chalk.white('  Your soul-driven AI agent'));
   console.log(chalk.dim(`  v${pkgVersion} · by Cosmic Stack · mercury.cosmicstack.org`));
   console.log('');
 }
@@ -82,7 +82,8 @@ function splashScreen() {
     console.log(chalk.bold.cyan(`  ${line}`));
   }
   console.log('');
-  console.log(chalk.dim('  an AI agent for personal tasks'));
+  console.log(chalk.bold.cyan('  MERCURY'));
+  console.log(chalk.dim('  Your soul-driven AI agent'));
   console.log(chalk.cyan('  by Cosmic Stack'));
   console.log(chalk.dim('  mercury.cosmicstack.org'));
   console.log('');
@@ -1034,15 +1035,51 @@ function autoDaemonize(): void {
   console.log('');
 }
 
+function runPlatformDoctor(): void {
+  const daemon = getDaemonStatus();
+  const termProgram = process.env.TERM_PROGRAM || 'unknown';
+  const term = process.env.TERM || 'unknown';
+  const isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const rawModeSupported = Boolean(process.stdin.isTTY && typeof (process.stdin as NodeJS.ReadStream).setRawMode === 'function');
+  const sshSession = Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY);
+  const ci = process.env.CI === 'true';
+  const canInlineArt = termProgram === 'iTerm.app' && !sshSession && !ci;
+
+  console.log('');
+  console.log(chalk.bold.cyan('  Mercury Platform Doctor'));
+  console.log(chalk.dim('  Cross-platform runtime compatibility report'));
+  console.log('');
+  console.log(`  OS:                 ${chalk.white(process.platform)} (${process.arch})`);
+  console.log(`  Node.js:            ${chalk.white(process.version)} (required >= 20)`);
+  console.log(`  Terminal program:   ${chalk.white(termProgram)}`);
+  console.log(`  TERM:               ${chalk.white(term)}`);
+  console.log(`  Interactive TTY:    ${isTTY ? chalk.green('yes') : chalk.yellow('no')}`);
+  console.log(`  Raw mode support:   ${rawModeSupported ? chalk.green('yes') : chalk.yellow('no')}`);
+  console.log(`  SSH session:        ${sshSession ? chalk.yellow('yes') : chalk.green('no')}`);
+  console.log(`  CI environment:     ${ci ? chalk.yellow('yes') : chalk.green('no')}`);
+  console.log(`  Daemon:             ${daemon.running ? chalk.green(`running (PID: ${daemon.pid})`) : chalk.dim('not running')}`);
+  console.log(`  Spotify inline art: ${canInlineArt ? chalk.green('supported (iTerm local)') : chalk.dim('disabled/fallback mode')}`);
+  console.log('');
+  console.log(chalk.bold.white('  Keybinding Notes'));
+  console.log(`  • View toggle:      ${chalk.white('Ctrl+V')} (fallback: ${chalk.white('/view')})`);
+  console.log(`  • Workspace exit:   ${chalk.white('Esc')} or ${chalk.white('Ctrl+Q')} (fallback: ${chalk.white('/ws exit')})`);
+  console.log(`  • Code mode switch: ${chalk.white('Ctrl+P')} plan, ${chalk.white('Ctrl+X')} execute`);
+  console.log('');
+
+  if (!rawModeSupported) {
+    console.log(chalk.yellow('  Warning: Raw mode is unavailable; interactive Ink input may be limited in this terminal.'));
+    console.log(chalk.dim('  Try a local terminal session with TTY support for the best experience.'));
+    console.log('');
+  }
+}
+
 async function runAgent(isDaemon: boolean = false): Promise<void> {
   let config = loadConfig();
   config = ensureCreatorField(config);
   const name = config.identity.name;
 
   if (!isDaemon) {
-    banner();
-    console.log(chalk.white(`  ${name} is waking up...`));
-    console.log('');
+    logger.info(`${name} is waking up...`);
   } else {
     logger.info(`${name} is waking up (daemon mode)...`);
   }
@@ -1071,10 +1108,7 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
       const marker = key === defaultProvider ? ' ← default' : '';
       return `${label}: ${model}${marker}`;
     });
-
-    console.log('');
-    console.log(chalk.bgMagenta.black.bold(` ⚡ ${getProviderLabel(defaultProvider)} · ${defaultModel} `));
-    console.log(chalk.dim(`  Providers: ${providerSummary.join('  ·  ')}`));
+    logger.info({ providers: providerSummary, default: getProviderLabel(defaultProvider) }, 'Providers loaded');
   } else {
     logger.info({ providers: available, default: defaultProvider }, 'Providers loaded');
   }
@@ -1082,7 +1116,7 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
   const skillLoader = new SkillLoader();
   const skills = skillLoader.discover();
   if (!isDaemon) {
-    console.log(chalk.dim(`  Skills: ${skills.length > 0 ? skills.map(s => s.name).join(', ') : 'none installed'}`));
+    logger.info(`Skills: ${skills.length > 0 ? skills.map(s => s.name).join(', ') : 'none installed'}`);
   }
 
   const scheduler = new Scheduler(config);
@@ -1098,7 +1132,7 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
     try {
       userMemory = new UserMemoryStore(config);
       if (!isDaemon) {
-        console.log(chalk.dim(`  Second brain: enabled (${userMemory.getSummary().total} existing memories)`));
+        logger.info(`Second brain: enabled (${userMemory.getSummary().total} existing memories)`);
       } else {
         logger.info({ total: userMemory.getSummary().total }, 'Second brain loaded');
       }
@@ -1196,8 +1230,9 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
     agent.setSupervisor(supervisor);
   }
 
+  let spotifyClient: SpotifyClient | undefined;
   if (config.spotify.clientId && config.spotify.clientSecret) {
-    const spotifyClient = new SpotifyClient(config);
+    spotifyClient = new SpotifyClient(config);
     capabilities.setSpotifyClient(spotifyClient);
     capabilities.registerSpotifyTools();
     agent.setSpotifyClient(spotifyClient);
@@ -1211,11 +1246,27 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
       const accountName = spotifyClient.getAccountName();
       const label = accountName ? ` as ${accountName}` : '';
       logger.info(`Spotify connected${label} (token available)`);
-      if (!isDaemon) {
-        console.log(chalk.green(`  Spotify: connected${label}`));
-      }
-    } else if (!isDaemon) {
-      console.log(chalk.dim('  Spotify: not connected — run /spotify auth to link your account'));
+    } else {
+      logger.info('Spotify: not connected — run /spotify auth to link your account');
+    }
+  }
+
+  if (!isDaemon) {
+    const bootCli = channels.getCliChannel();
+    if (bootCli) {
+      await channels.startAll();
+      const skillInfos = skills.map((s) => ({ name: s.name, description: s.description, loaded: true }));
+      bootCli.initSplash(name, pkgVersion);
+      bootCli.setSkills(skillInfos);
+      bootCli.setProvider(getProviderLabel(defaultProvider), defaultModel);
+      bootCli.setTokenInfo(tokenBudget.getDailyUsed(), tokenBudget.getBudget(), Math.round(tokenBudget.getUsagePercentage()));
+      bootCli.mountTUI((inputText: string) => {
+        bootCli.sendUserMessage(inputText);
+      }, spotifyClient, () => {
+        process.exit(0);
+      });
+    } else {
+      await channels.startAll();
     }
   }
 
@@ -1255,22 +1306,16 @@ async function runAgent(isDaemon: boolean = false): Promise<void> {
 
   if (!isDaemon) {
     if (config.identity.creator) {
-      console.log(chalk.dim(`  Creator: ${config.identity.creator}`));
+      logger.info(`Creator: ${config.identity.creator}`);
     }
-    hr();
 
     const mode = cliChannel && await cliChannel.askPermissionMode?.();
     if (mode === 'allow-all') {
       capabilities.permissions.setAutoApproveAll(true);
       capabilities.permissions.addTempScope('/', true, true);
     }
-
-    console.log('');
-    console.log(chalk.green(`  ${name} is live. Type a message and press Enter.`));
-    console.log(chalk.dim('  Ctrl+C to exit · /help for commands'));
-    console.log('');
-    cliChannel?.showPrompt();
   } else {
+    await channels.startAll();
     logger.info({ channels: activeCh, tools: toolNames }, 'Mercury is live (daemon mode)');
   }
 
@@ -1418,8 +1463,13 @@ program
 
 program
   .command('doctor')
-  .description('Reconfigure Mercury — change keys, name, settings (Enter to keep current)')
-  .action(async () => {
+  .description('Reconfigure Mercury setup (name, providers, channels, permissions defaults)')
+  .option('--platform', 'Show platform compatibility diagnostics')
+  .action(async (opts) => {
+    if (opts.platform) {
+      runPlatformDoctor();
+      return;
+    }
     if (isSetupComplete()) {
       await configure(loadConfig());
     } else {

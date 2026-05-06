@@ -14,7 +14,7 @@ export function formatNowPlaying(data: any): string {
   const repeat: Record<string, string> = { off: '', track: '🔂', context: '🔁' };
   const repeatIcon = repeat[data.repeat_state] || '';
   const albumArt = track.album?.images?.[0]?.url;
-  let text = `${status} **${name}** by ${artists}\n`;
+  let text = `${status} ${name} by ${artists}\n`;
   text += `${bar} ${formatTime(progress)}/${formatTime(duration)}\n`;
   text += `${shuffle}${repeatIcon}`;
   if (albumArt) text += ` | Album: ${track.album?.name}`;
@@ -37,7 +37,8 @@ export const PLAYER_CONTROLS = [
   { value: 'now', label: '🎵 Now Playing' },
   { value: 'devices', label: '📱 Devices' },
   { value: 'search', label: '🔍 Search & Play' },
-  { value: 'volume', label: '🔊 Set Volume' },
+  { value: 'volume_up', label: '🔊 Volume +10%' },
+  { value: 'volume_down', label: '🔉 Volume -10%' },
   { value: 'queue', label: '📋 Add to Queue' },
   { value: 'like', label: '❤️  Like Current Track' },
   { value: 'exit', label: '✕  Exit Player' },
@@ -81,6 +82,22 @@ export async function handlePlayerAction(
       if (!data?.item?.id) return 'Nothing playing to like.';
       return await spotify.likeTrack(data.item.id);
     }
+    case 'volume_up': {
+      const state = await spotify.getPlaybackState();
+      const current = typeof state?.device?.volume_percent === 'number' ? state.device.volume_percent : 50;
+      const next = Math.min(100, current + 10);
+      return await spotify.setVolume(next);
+    }
+    case 'volume_down': {
+      const state = await spotify.getPlaybackState();
+      const current = typeof state?.device?.volume_percent === 'number' ? state.device.volume_percent : 50;
+      const next = Math.max(0, current - 10);
+      return await spotify.setVolume(next);
+    }
+    case 'queue':
+      return 'Use `/spotify queue <track name>` to choose what to add.';
+    case 'search':
+      return 'Use `/spotify search <track name>` to search and play.';
     default:
       return 'Unknown action';
   }

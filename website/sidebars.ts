@@ -33,6 +33,7 @@ const sidebars: SidebarsConfig = {
         'integrations/github-companion',
         'integrations/telegram',
         'integrations/spotify',
+        'integrations/coding-workspace',
         'integrations/sub-agents',
       ],
     },
@@ -48,6 +49,15 @@ const sidebars: SidebarsConfig = {
         'reference/provider-fallback',
         'reference/scheduling',
         'reference/skills',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Releases',
+      collapsed: true,
+      items: [
+        'releases/releases',
+        'releases/1.1.6',
       ],
     },
   ],

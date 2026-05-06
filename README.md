@@ -39,12 +39,13 @@ npm i -g @cosmicstack/mercury-agent
 mercury
 ```
 
-First run triggers the setup wizard — enter your name, an API key, and optionally a Telegram bot token. Takes 30 seconds.
+First run triggers the setup wizard (name, provider, optional Telegram). After setup, Mercury opens the Ink TUI startup screen and asks for your permission mode (`Ask Me` or `Allow All`) before chat starts.
 
 To reconfigure later (change keys, name, settings):
 
 ```bash
 mercury doctor
+mercury doctor --platform
 ```
 
 ## Why Mercury?
@@ -58,6 +59,8 @@ Every AI agent can read files, run commands, and fetch URLs. Most do it silently
 - **Live streaming** — Real-time token streaming on CLI with cursor-save/restore and markdown re-rendering. Telegram streaming with editable status messages.
 - **Always on** — Run as a background daemon on any OS. Auto-restarts on crash. Starts on boot. Cron scheduling, heartbeat monitoring, and proactive notifications.
 - **Extensible** — Install community skills with a single command. Schedule skills as recurring tasks. Based on the [Agent Skills](https://agentskills.io) specification.
+
+Mercury now seeds a default `web-search` skill on first run in `~/.mercury/skills/web-search/SKILL.md`.
 
 ## Daemon Mode
 
@@ -115,7 +118,8 @@ In daemon mode, Telegram becomes your primary channel — CLI is log-only since 
 | `mercury restart` | Restart the background process |
 | `mercury stop` | Stop a background process |
 | `mercury logs` | View recent daemon logs |
-| `mercury doctor` | Reconfigure (Enter to keep current values) |
+| `mercury doctor` | Reconfigure setup (name, providers, channels, permissions defaults) |
+| `mercury doctor --platform` | Show cross-platform terminal/daemon compatibility diagnostics |
 | `mercury setup` | Re-run the setup wizard |
 | `mercury status` | Show config and daemon status |
 | `mercury help` | Show full manual |
@@ -149,6 +153,11 @@ Type these during a conversation — they don't consume API tokens. Work on both
 | `/budget reset` | Reset usage to zero |
 | `/budget set <n>` | Change daily token budget |
 | `/permissions` | Change permission mode (Ask Me / Allow All) |
+| `/view` | Toggle progress view (balanced/detailed) |
+| `/view balanced` | Set compact progress view |
+| `/view detailed` | Set full progress view |
+| `/code agent <task>` | Delegate a coding task to a sub-agent in background |
+| `/ws exit` | Exit workspace IDE mode back to general chat |
 | `/tasks` | List scheduled tasks |
 | `/memory` | View and manage second brain memory |
 | `/unpair` | Telegram: reset all access |
@@ -170,8 +179,23 @@ Type these during a conversation — they don't consume API tokens. Work on both
 
 | Channel | Features |
 |---------|----------|
-| **CLI** | Readline prompt, arrow-key command menus, real-time text streaming with markdown re-rendering, permission mode picker |
+| **CLI** | Ink TUI, startup permission mode picker, interactive permission prompts (arrow keys + Enter; Y/N/A shortcuts), progress views (balanced/detailed), real-time streaming |
 | **Telegram** | HTML formatting, editable streaming messages, file uploads, typing indicators, multi-user access with admin/member roles |
+
+### Workspace/Coding Shortcuts (CLI)
+
+- `Ctrl+P` → switch to Plan mode
+- `Ctrl+X` → switch to Execute mode
+- `Esc` or `Ctrl+Q` → exit workspace to general chat
+- `Ctrl+V` → toggle progress view (`/view` is fallback when terminal intercepts Ctrl+V)
+
+### Spotify UI Notes (CLI)
+
+- Spotify deck supports keyboard shortcuts: `N` next, `P` previous, `+/-` volume, `Z` now playing.
+- Inline album art is optional and safe-gated:
+  - Enable with `MERCURY_SPOTIFY_ART=1`
+  - Currently renders only in local iTerm sessions
+  - Automatically falls back to text-only UI in SSH/mobile/light terminals
 
 ### Telegram Access
 

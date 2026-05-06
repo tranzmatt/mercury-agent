@@ -1,4 +1,5 @@
 import { generateText, streamText, stepCountIs } from 'ai';
+import path from 'node:path';
 import type { ChannelMessage, ChannelType } from '../types/channel.js';
 import type { ProviderRegistry } from '../providers/registry.js';
 import type { Identity } from '../soul/identity.js';
@@ -10,9 +11,11 @@ import type { TokenBudget } from '../utils/tokens.js';
 import type { CapabilityRegistry } from '../capabilities/registry.js';
 import type { ScheduledTaskManifest } from './scheduler.js';
 import { DeepSeekProvider } from '../providers/deepseek.js';
+import { ProviderRegistry as ProviderRegistryImpl } from '../providers/registry.js';
 import { Lifecycle } from './lifecycle.js';
 import { Scheduler } from './scheduler.js';
 import { ProgrammingMode } from './programming-mode.js';
+import { BackgroundTaskManager } from './background-tasks.js';
 import { logger } from '../utils/logger.js';
 import { CLIChannel } from '../channels/cli.js';
 import { TelegramChannel } from '../channels/telegram.js';
@@ -33,6 +36,7 @@ import {
   rejectTelegramPendingRequest,
   removeTelegramUser,
   saveConfig,
+  getActiveProviders,
 } from '../utils/config.js';
 
 class ToolCallLoopDetector {
@@ -244,6 +248,7 @@ class ToolCallLoopDetector {
 }
 
 const MAX_STEPS = 10;
+const MAX_RESPONSE_TOKENS = 1600;
 
 export class Agent {
   readonly lifecycle: Lifecycle;
@@ -253,9 +258,13 @@ export class Agent {
   private messageQueue: ChannelMessage[] = [];
   private processing = false;
   private telegramStreaming: boolean;
+  private currentMessage: ChannelMessage | null = null;
+  private currentAbort: AbortController | null = null;
+  private autoBackgroundHandoff = false;
   private supervisor?: import('../core/supervisor.js').SubAgentSupervisor;
   readonly programmingMode: ProgrammingMode;
   private spotifyClient?: SpotifyClient;
+  readonly backgroundTasks: BackgroundTaskManager;
 
   constructor(
     private config: MercuryConfig,
@@ -275,6 +284,11 @@ export class Agent {
     this.capabilities = capabilities;
     this.telegramStreaming = config.channels.telegram.streaming ?? true;
     this.programmingMode = new ProgrammingMode();
+    this.backgroundTasks = new BackgroundTaskManager();
+
+    this.backgroundTasks.onGlobalComplete((task) => {
+      this.notifyBackgroundTaskComplete(task);
+    });
 
     this.scheduler.setOnScheduledTask(async (manifest) => this.handleScheduledTask(manifest));
 
@@ -297,12 +311,47 @@ export class Agent {
         await channel.send(message, channelId).catch(() => {});
       }
     });
+    supervisor.setLifecycleCallback((event) => {
+      const bgTask = this.backgroundTasks.getByAgentId(event.agentId);
+      if (!bgTask) return;
+
+      if (event.type === 'progress' && event.progress) {
+        this.backgroundTasks.updateAgentProgress(bgTask.id, event.progress);
+        this.syncBgTasksToTui();
+        return;
+      }
+
+      if (event.type === 'complete' && event.result) {
+        const result = event.result;
+        const status = result.status === 'completed' ? 'completed' : result.status === 'halted' ? 'cancelled' : 'failed';
+        this.backgroundTasks.completeAgentTask(bgTask.id, status === 'completed' ? 0 : 1, status, result.output);
+        this.syncBgTasksToTui();
+      }
+    });
   }
 
   private enqueueMessage(msg: ChannelMessage): void {
     logger.info({ from: msg.channelType, content: msg.content.slice(0, 50) }, 'Message enqueued');
 
     const trimmed = msg.content.trim();
+
+    if (
+      this.processing &&
+      !trimmed.startsWith('/') &&
+      msg.channelType !== 'internal' &&
+      this.supervisor &&
+      this.currentMessage &&
+      this.currentAbort &&
+      !this.currentAbort.signal.aborted &&
+      !this.autoBackgroundHandoff &&
+      this.currentMessage.channelType === msg.channelType &&
+      this.currentMessage.channelId === msg.channelId
+    ) {
+      void this.autoBackgroundCurrentTask(msg).catch((err) => {
+        logger.warn({ err }, 'Auto-background handoff failed');
+      });
+    }
+
     if (this.processing && trimmed.startsWith('/')) {
       this.handleFastPathCommand(msg).catch((err) => {
         logger.error({ err, content: trimmed.slice(0, 50) }, 'Fast-path command failed');
@@ -312,6 +361,37 @@ export class Agent {
 
     this.messageQueue.push(msg);
     this.processQueue();
+  }
+
+  private async autoBackgroundCurrentTask(interruptMsg: ChannelMessage): Promise<void> {
+    if (!this.currentMessage || !this.currentAbort || !this.supervisor) return;
+    if (this.currentAbort.signal.aborted || this.autoBackgroundHandoff) return;
+    this.autoBackgroundHandoff = true;
+    try {
+      const taskDescription = this.currentMessage.content.trim();
+      if (!taskDescription) return;
+
+      this.currentAbort.abort();
+
+      const agentId = await this.supervisor.spawn({
+        task: taskDescription,
+        sourceChannelId: this.currentMessage.channelId,
+        sourceChannelType: this.currentMessage.channelType as any,
+        workingDirectory: this.capabilities.getCwd(),
+      });
+      const bgId = this.backgroundTasks.spawnAgent(taskDescription, this.capabilities.getCwd(), agentId);
+      this.syncBgTasksToTui();
+
+      const channel = this.channels.getChannelForMessage(interruptMsg);
+      if (channel) {
+        await channel.send(
+          `📋 I moved the in-progress task to background (${bgId}) so I can respond now. Use /bg ${bgId} or /bg list for progress.`,
+          interruptMsg.channelId,
+        ).catch(() => {});
+      }
+    } finally {
+      this.autoBackgroundHandoff = false;
+    }
   }
 
   private async handleFastPathCommand(msg: ChannelMessage): Promise<void> {
@@ -353,8 +433,13 @@ export class Agent {
       return;
     }
 
+    if (trimmed.startsWith('/bg')) {
+      await this.handleBgCommand(trimmed, msg, channel);
+      return;
+    }
+
     if (trimmed === '/help') {
-      await channel.send('Agent is busy. Available: /agents, /halt, /stop, /spotify, /code, /memory', msg.channelId);
+      await channel.send('Agent is busy. Available: /agents, /halt, /stop, /spotify, /code, /memory, /bg', msg.channelId);
       return;
     }
 
@@ -377,7 +462,7 @@ export class Agent {
       const agentList = activeAgents.map(a => `**${a.id}**: ${a.task.slice(0, 40)}`).join(', ');
       await channel.send(`I'm busy working on sub-agent tasks (${agentList}). Your message has been queued — I'll respond once I'm free. Use /agents to check status.`, msg.channelId);
     } else {
-      await channel.send("I'm busy processing. Your message has been queued — I'll respond once I'm free.", msg.channelId);
+      await channel.send("I'm busy processing. Use /bg current to move this task to the background, or wait for it to finish.", msg.channelId);
     }
 
     this.messageQueue.push(msg);
@@ -426,6 +511,190 @@ export class Agent {
     await channel.send('Agent is busy. Programming mode changes will be available after current task completes.', msg.channelId);
   }
 
+  private async handleBgCommand(trimmed: string, msg: ChannelMessage, channel: any): Promise<void> {
+    const parts = trimmed.split(/\s+/);
+    const sub = parts.length > 1 ? parts[1] : '';
+    const args = parts.slice(1).join(' ');
+
+    if (sub === 'current') {
+      if (!this.processing || !this.currentMessage) {
+        await channel.send('No active task to background.', msg.channelId);
+        return;
+      }
+      const taskDescription = this.currentMessage.content.trim();
+      const sourceChannelId = this.currentMessage.channelId;
+      const sourceChannelType = this.currentMessage.channelType as any;
+
+      if (this.currentAbort) {
+        this.currentAbort.abort();
+      }
+
+      if (this.supervisor) {
+        const agentId = await this.supervisor.spawn({
+          task: taskDescription,
+          sourceChannelId,
+          sourceChannelType,
+        });
+        const bgId = this.backgroundTasks.spawnAgent(taskDescription, this.capabilities.getCwd(), agentId);
+        await channel.send(`📋 Active task moved to background as ${bgId}. I'll notify you when it completes.`, msg.channelId);
+      } else {
+        await channel.send('Cannot background: sub-agents not available. The active task has been aborted.', msg.channelId);
+      }
+
+      this.syncBgTasksToTui();
+      return;
+    }
+
+    if (sub === 'list' || sub === '' || sub === 'ls') {
+      const tasks = this.backgroundTasks.getAllSummaries();
+      if (tasks.length === 0) {
+        await channel.send('No background tasks.', msg.channelId);
+        return;
+      }
+      const lines = tasks.map((t) => {
+        const icon = t.status === 'running' ? '⏳' : t.status === 'completed' ? '✅' : t.status === 'failed' ? '❌' : t.status === 'timed_out' ? '⏱' : '⛔';
+        const label = t.command || t.task || t.id;
+        const elapsed = t.runningMs ? ` (${Math.round(t.runningMs / 1000)}s)` : t.completedAt ? ` (${((t.completedAt - t.startedAt) / 1000).toFixed(1)}s)` : '';
+        const short = label.length > 60 ? label.slice(0, 57) + '...' : label;
+        return `${icon} ${t.id}: ${short}${elapsed} — ${t.status}`;
+      });
+      await channel.send(`**Background Tasks:**\n${lines.join('\n')}\n\nUse /bg <id> for details, /bg cancel <id> to cancel, /bg clear to prune completed tasks.`, msg.channelId);
+      return;
+    }
+
+    if (sub === 'clear') {
+      const cleared = this.backgroundTasks.clearCompleted();
+      await channel.send(`Cleared ${cleared} completed task(s).`, msg.channelId);
+      this.syncBgTasksToTui();
+      return;
+    }
+
+    if (sub === 'cancel') {
+      const taskId = parts[2];
+      if (!taskId) {
+        await channel.send('Usage: /bg cancel <id>', msg.channelId);
+        return;
+      }
+      const cancelled = this.backgroundTasks.cancel(taskId);
+      if (cancelled) {
+        await channel.send(`⛔ Cancelled background task ${taskId}.`, msg.channelId);
+      } else {
+        await channel.send(`Task ${taskId} not found or not running.`, msg.channelId);
+      }
+      this.syncBgTasksToTui();
+      return;
+    }
+
+    const specificTask = this.backgroundTasks.getSummary(sub);
+    if (specificTask) {
+      const task = this.backgroundTasks.get(sub)!;
+      const label = task.command || task.task || task.id;
+      const elapsed = task.status === 'running'
+        ? `Running for ${Math.round((Date.now() - task.startedAt) / 1000)}s`
+        : task.completedAt
+          ? `Completed in ${((task.completedAt - task.startedAt) / 1000).toFixed(1)}s`
+          : task.status;
+      const output = (task.stdout + '\n' + task.stderr).trim();
+      const preview = output.length > 2000 ? output.slice(-2000) : output;
+      await channel.send(`**${specificTask.id}**: ${label}\nStatus: ${elapsed}\nExit code: ${task.exitCode ?? 'N/A'}\n\n${preview || '(no output)'}`, msg.channelId);
+      return;
+    }
+
+    const colonIdx = trimmed.indexOf(':');
+    if (sub.startsWith('cancel')) {
+      const taskId2 = parts[2];
+      if (!taskId2) {
+        await channel.send('Usage: /bg cancel <id>', msg.channelId);
+        return;
+      }
+      const cancelled = this.backgroundTasks.cancel(taskId2);
+      if (cancelled) {
+        await channel.send(`⛔ Cancelled background task ${taskId2}.`, msg.channelId);
+      } else {
+        await channel.send(`Task ${taskId2} not found or not running.`, msg.channelId);
+      }
+      this.syncBgTasksToTui();
+      return;
+    }
+
+    if (colonIdx !== -1 && trimmed[colonIdx + 1] === ' ') {
+      const taskDescription = trimmed.slice(colonIdx + 1).trim();
+      if (!taskDescription) {
+        await channel.send('Usage: /bg: <natural language task> or /bg <shell command>', msg.channelId);
+        return;
+      }
+      if (!this.supervisor) {
+        await channel.send('Sub-agents are not available. Use /bg <command> for shell commands.', msg.channelId);
+        return;
+      }
+      const agentId = await this.supervisor.spawn({
+        task: taskDescription,
+        sourceChannelId: msg.channelId,
+        sourceChannelType: msg.channelType as any,
+      });
+      const bgId = this.backgroundTasks.spawnAgent(taskDescription, this.capabilities.getCwd(), agentId);
+      this.backgroundTasks.registerComplete(bgId, (task) => {
+        if (task.status === 'running') return;
+      });
+      await channel.send(`📋 Background agent ${bgId} started: "${taskDescription.slice(0, 50)}${taskDescription.length > 50 ? '...' : ''}"`, msg.channelId);
+      this.syncBgTasksToTui();
+      return;
+    }
+
+    const command = args || '';
+    if (!command) {
+      await channel.send('Usage:\n• /bg <command> — run a shell command in the background\n• /bg: <task> — delegate an LLM task to the background\n• /bg current — move the active task to the background\n• /bg list — show all background tasks\n• /bg <id> — show task details\n• /bg cancel <id> — cancel a running task\n• /bg clear — prune completed tasks', msg.channelId);
+      return;
+    }
+
+    const cwd = this.capabilities.getCwd();
+    const bgId = this.backgroundTasks.spawnShell(command, cwd);
+    await channel.send(`📋 Background task ${bgId} started: "${command.slice(0, 50)}${command.length > 50 ? '...' : ''}"`, msg.channelId);
+    this.syncBgTasksToTui();
+  }
+
+  private syncBgTasksToTui(): void {
+    const cliChannel = this.channels.get('cli');
+    if (cliChannel && cliChannel instanceof CLIChannel) {
+      (cliChannel as CLIChannel).updateBackgroundTasks(this.backgroundTasks.getAllSummaries());
+    }
+  }
+
+  private notifyBackgroundTaskComplete(task: import('./background-tasks.js').BackgroundTask): void {
+    const label = task.command || task.task || task.id;
+    const duration = task.completedAt ? ` in ${((task.completedAt - task.startedAt) / 1000).toFixed(1)}s` : '';
+    let message: string;
+
+    if (task.status === 'completed') {
+      message = `✅ Background task ${task.id} completed${duration}: "${label}"`;
+    } else if (task.status === 'failed') {
+      message = `❌ Background task ${task.id} failed${duration}: "${label}" (exit code ${task.exitCode ?? 'unknown'})`;
+    } else if (task.status === 'timed_out') {
+      message = `⏱ Background task ${task.id} timed out: "${label}"`;
+    } else if (task.status === 'cancelled') {
+      message = `⛔ Background task ${task.id} cancelled: "${label}"`;
+    } else {
+      message = `Background task ${task.id}: ${task.status} — "${label}"`;
+    }
+
+    const output = (task.stdout + '\n' + task.stderr).trim();
+    if (output) {
+      const preview = output.length > 500 ? '\n' + output.slice(-500) : '\n' + output;
+      message += preview;
+    }
+
+    const cliCh = this.channels.get('cli');
+    if (cliCh) {
+      (cliCh as CLIChannel).send(message).catch(() => {});
+    }
+    const tgCh = this.channels.get('telegram');
+    if (tgCh) {
+      tgCh.send(message).catch(() => {});
+    }
+
+    this.syncBgTasksToTui();
+  }
+
   private async processQueue(): Promise<void> {
     if (this.processing) return;
     if (this.messageQueue.length === 0) return;
@@ -443,6 +712,25 @@ export class Agent {
     }
 
     this.processing = false;
+  }
+
+  private switchSessionProvider(providerName: string): { ok: boolean; message: string } {
+    const active = getActiveProviders(this.config).map((p) => p.name);
+    if (!active.includes(providerName)) {
+      return { ok: false, message: `Provider \`${providerName}\` is not configured. Run \`mercury doctor\` to add/configure models.` };
+    }
+
+    this.config.providers.default = providerName as any;
+    this.providers = new ProviderRegistryImpl(this.config);
+    const selected = this.providers.getDefault();
+    const model = selected.getModel();
+
+    const cliChannel = this.channels.get('cli');
+    if (cliChannel && cliChannel instanceof CLIChannel) {
+      cliChannel.setProvider(providerName, model);
+    }
+
+    return { ok: true, message: `Session model switched to **${providerName}** · **${model}**.` };
   }
 
   async birth(): Promise<void> {
@@ -541,6 +829,11 @@ export class Agent {
       }
 
       if (await this.handleChatCommand(trimmed, msg.channelType, msg.channelId)) {
+        this.lifecycle.transition('idle');
+        return;
+      }
+
+      if (await this.handleWorkspaceNaturalLanguage(trimmed, msg.channelType, msg.channelId)) {
         this.lifecycle.transition('idle');
         return;
       }
@@ -662,6 +955,9 @@ export class Agent {
       const loopAbortController = new AbortController();
       let loopWarningSent = false;
 
+      this.currentMessage = msg;
+      this.currentAbort = loopAbortController;
+
       const canStream = msg.channelType === 'cli' || (msg.channelType === 'telegram' && this.telegramStreaming);
 
       const tgChannel = this.channels.get('telegram');
@@ -683,6 +979,7 @@ export class Agent {
               system: systemPrompt,
               messages,
               tools: this.capabilities.getTools(),
+              maxOutputTokens: MAX_RESPONSE_TOKENS,
               stopWhen: stepCountIs(MAX_STEPS),
               abortSignal: loopAbortController.signal,
               ...(deepseekProviderOptions ? { providerOptions: deepseekProviderOptions } : {}),
@@ -756,7 +1053,7 @@ export class Agent {
                   if (channel && msg.channelType !== 'internal') {
                     if (channel instanceof CLIChannel) {
                       for (const tc of toolCalls) {
-                        await (channel as CLIChannel).sendToolFeedback(tc.toolName, tc.input as Record<string, any>).catch(() => {});
+                        void (channel as CLIChannel).sendToolFeedback(tc.toolName, tc.input as Record<string, any>).catch(() => {});
                       }
                       if (toolResults) {
                         for (let i = 0; i < toolResults.length; i++) {
@@ -770,7 +1067,7 @@ export class Agent {
                     } else if (channel instanceof TelegramChannel) {
                       const tgCh = channel as TelegramChannel;
                       for (const tc of toolCalls) {
-                        await tgCh.sendToolFeedback(tc.toolName, tc.input as Record<string, any>, msg.channelId).catch(() => {});
+                        void tgCh.sendToolFeedback(tc.toolName, tc.input as Record<string, any>, msg.channelId).catch(() => {});
                       }
                       if (toolResults) {
                         for (let i = 0; i < toolResults.length; i++) {
@@ -848,6 +1145,7 @@ export class Agent {
               system: systemPrompt,
               messages,
               tools: this.capabilities.getTools(),
+              maxOutputTokens: MAX_RESPONSE_TOKENS,
               stopWhen: stepCountIs(MAX_STEPS),
               abortSignal: loopAbortController.signal,
               ...(deepseekProviderOptions ? { providerOptions: deepseekProviderOptions } : {}),
@@ -921,7 +1219,7 @@ export class Agent {
                   if (channel && msg.channelType !== 'internal') {
                     if (channel instanceof CLIChannel) {
                       for (const tc of toolCalls) {
-                        await (channel as CLIChannel).sendToolFeedback(tc.toolName, tc.input as Record<string, any>).catch(() => {});
+                        void (channel as CLIChannel).sendToolFeedback(tc.toolName, tc.input as Record<string, any>).catch(() => {});
                       }
                       if (toolResults) {
                         for (let i = 0; i < toolResults.length; i++) {
@@ -935,7 +1233,7 @@ export class Agent {
                     } else if (channel instanceof TelegramChannel) {
                       const tgCh = channel as TelegramChannel;
                       for (const tc of toolCalls) {
-                        await tgCh.sendToolFeedback(tc.toolName, tc.input as Record<string, any>, msg.channelId).catch(() => {});
+                        void tgCh.sendToolFeedback(tc.toolName, tc.input as Record<string, any>, msg.channelId).catch(() => {});
                       }
                       if (toolResults) {
                         for (let i = 0; i < toolResults.length; i++) {
@@ -1070,6 +1368,8 @@ export class Agent {
       logger.error({ err }, 'Error handling message');
       this.lifecycle.transition('idle');
     } finally {
+      this.currentMessage = null;
+      this.currentAbort = null;
       if (isInternal || isScheduled) {
         this.capabilities.permissions.setAutoApproveAll(false);
       }
@@ -1322,6 +1622,10 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
   }
 
   async shutdown(): Promise<void> {
+    if (this.supervisor) {
+      await this.supervisor.haltAll();
+    }
+    this.backgroundTasks.destroy();
     await this.sleep();
     logger.info('Mercury has shut down');
   }
@@ -1453,6 +1757,12 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
       return true;
     }
 
+    if (cmd.startsWith('/bg')) {
+      const args = trimmed.slice('/bg'.length).trim();
+      await this.handleBgCommand(args, { content: trimmed, channelId, channelType: channelType as any, id: Date.now().toString(36), senderId: 'user', timestamp: Date.now() }, channel);
+      return true;
+    }
+
     if (cmd === '/exit' || cmd === '/quit') {
       await channel.send('Goodbye! Shutting down Mercury...', channelId);
       this.shutdown();
@@ -1489,6 +1799,63 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
         `Skills: ${ctx.skillNames().length > 0 ? ctx.skillNames().join(', ') : 'none'}`,
       ];
       await channel.send(lines.join('\n'), channelId);
+      return true;
+    }
+
+    if (cmd === '/models' || cmd === '/model' || cmd.startsWith('/models ') || cmd.startsWith('/model ')) {
+      const base = cmd.startsWith('/model ') || cmd === '/model' ? '/model' : '/models';
+      const rawArgs = trimmed.slice(base.length).trim();
+      const activeProviders = getActiveProviders(this.config);
+      const current = this.providers.getDefault();
+
+      if (!rawArgs) {
+        const lines = [
+          '**Session Models**',
+          '',
+          ...activeProviders.map((p) => {
+            const marker = p.name === current.name ? ' ← current' : '';
+            return `• ${p.name} · ${p.model}${marker}`;
+          }),
+          '',
+          'Use `/models use <provider>` to switch for this session.',
+          'Use `mercury doctor` to add/configure models.',
+        ];
+        await channel.send(lines.join('\n'), channelId);
+
+        if (channelType === 'cli' && channel instanceof CLIChannel && activeProviders.length > 1) {
+          const choices = [
+            ...activeProviders.map((p) => `${p.name} · ${p.model}${p.name === current.name ? ' (current)' : ''}`),
+            'Open doctor instructions',
+            'Keep current model',
+          ];
+          const picked = await this.presentChoice('Switch session model?', choices, channelId, channelType);
+          if (picked === 'Open doctor instructions') {
+            await channel.send('Run `mercury doctor` and update provider/model settings. Then restart Mercury to persist defaults.', channelId);
+            return true;
+          }
+          if (picked === 'Keep current model') return true;
+          const providerName = picked.split(' · ')[0].trim();
+          if (providerName && providerName !== current.name) {
+            const switched = this.switchSessionProvider(providerName);
+            await channel.send(switched.message, channelId);
+          }
+        }
+        return true;
+      }
+
+      if (rawArgs === 'doctor' || rawArgs === 'add') {
+        await channel.send('Use `mercury doctor` to add/configure models. Then use `/models` to switch active session model.', channelId);
+        return true;
+      }
+
+      const target = rawArgs.replace(/^use\s+/i, '').trim();
+      if (!target) {
+        await channel.send('Usage: `/models` or `/models use <provider>`', channelId);
+        return true;
+      }
+
+      const switched = this.switchSessionProvider(target);
+      await channel.send(switched.message, channelId);
       return true;
     }
 
@@ -1737,26 +2104,104 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
 
     if (cmd.startsWith('/code')) {
       const rawArgs = trimmed.slice('/code'.length).trim().toLowerCase();
+      const cliChannel = channelType === 'cli' && channel instanceof CLIChannel ? channel : null;
 
-      if (!rawArgs || rawArgs === 'status') {
+      if (!rawArgs) {
+        if (cliChannel) {
+          const choice = await this.presentChoice(
+            'Code mode: open workspace IDE now?',
+            ['Yes, open current workspace', 'No, keep classic coding mode'],
+            channelId,
+            channelType,
+          );
+          if (choice.toLowerCase().startsWith('yes')) {
+            const current = this.capabilities.getCwd();
+            const opened = cliChannel.openWorkspace(current);
+            if (opened.ok) {
+              this.capabilities.permissions.addTempScope(current, true, true);
+              this.programmingMode.setExecute();
+              this.programmingMode.setProjectContext(current);
+              cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
+              await channel.send(`${opened.message}\nWorkspace IDE mode enabled.`, channelId);
+              return true;
+            }
+            await channel.send(opened.message, channelId);
+            return true;
+          }
+        }
         await channel.send(this.programmingMode.getStatusText(), channelId);
+        return true;
+      }
+
+      if (rawArgs === 'status') {
+        await channel.send(this.programmingMode.getStatusText(), channelId);
+        return true;
+      }
+
+      if (rawArgs === 'workspace' || rawArgs === 'ws') {
+        if (!cliChannel) {
+          await channel.send('Workspace IDE mode is currently available in CLI only.', channelId);
+          return true;
+        }
+        const current = this.capabilities.getCwd();
+        const opened = cliChannel.openWorkspace(current);
+        if (opened.ok) {
+          this.programmingMode.setExecute();
+          cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
+          await channel.send(`${opened.message}\nWorkspace IDE mode enabled.`, channelId);
+        } else {
+          await channel.send(opened.message, channelId);
+        }
         return true;
       }
 
       if (rawArgs === 'plan') {
         this.programmingMode.setPlan();
+        if (cliChannel) cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
         await channel.send('Programming mode: **Plan**\nI will explore, analyze, and present a plan before writing any code. Use `/code execute` to switch to execution.', channelId);
         return true;
       }
 
       if (rawArgs === 'execute' || rawArgs === 'exec') {
         this.programmingMode.setExecute();
+        if (cliChannel) cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
         await channel.send('Programming mode: **Execute**\nI will implement the plan step by step, verifying with builds/tests. Use `/code off` to exit.', channelId);
+        return true;
+      }
+
+      if (rawArgs === 'build') {
+        this.programmingMode.setExecute();
+        if (cliChannel) cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
+        await channel.send('Programming mode: **Build**\nExecution mode is active for implementation/build tasks.', channelId);
+        return true;
+      }
+
+      if (rawArgs.startsWith('agent ') || rawArgs.startsWith('delegate ')) {
+        if (!this.supervisor) {
+          await channel.send('Sub-agents are not enabled in this environment.', channelId);
+          return true;
+        }
+        const taskDescription = rawArgs.replace(/^(agent|delegate)\s+/, '').trim();
+        if (!taskDescription) {
+          await channel.send('Usage: `/code agent <task>`', channelId);
+          return true;
+        }
+        const cwd = this.capabilities.getCwd();
+        const agentId = await this.supervisor.spawn({
+          task: taskDescription,
+          sourceChannelId: channelId,
+          sourceChannelType: channelType as any,
+          workingDirectory: cwd,
+        });
+        const bgId = this.backgroundTasks.spawnAgent(taskDescription, cwd, agentId);
+        this.syncBgTasksToTui();
+        await channel.send(`Started coding sub-agent ${agentId} in background task ${bgId}. Use /bg ${bgId} for progress.`, channelId);
         return true;
       }
 
       if (rawArgs === 'off' || rawArgs === 'exit') {
         this.programmingMode.setOff();
+        if (cliChannel) cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
         await channel.send('Programming mode: **Off**\nBack to normal conversation mode.', channelId);
         return true;
       }
@@ -1764,11 +2209,81 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
       if (rawArgs === 'toggle') {
         const newState = this.programmingMode.toggle();
         const labels: Record<string, string> = { off: 'Off', plan: 'Plan', execute: 'Execute' };
+        if (cliChannel) cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
         await channel.send(`Programming mode: **${labels[newState]}**`, channelId);
         return true;
       }
 
-      await channel.send('Unknown /code command. Available: /code, /code plan, /code execute, /code off, /code toggle', channelId);
+      await channel.send('Unknown /code command. Available: /code, /code plan, /code execute, /code build, /code workspace, /code agent <task>, /code off, /code toggle', channelId);
+      return true;
+    }
+
+    if (cmd.startsWith('/ws') || cmd.startsWith('/workspace')) {
+      const cliChannel = channelType === 'cli' && channel instanceof CLIChannel ? channel : null;
+      if (!cliChannel) {
+        await channel.send('Workspace IDE mode is currently available in CLI only.', channelId);
+        return true;
+      }
+
+      const base = cmd.startsWith('/workspace') ? '/workspace' : '/ws';
+      const rawArgs = trimmed.slice(base.length).trim();
+      const rawLower = rawArgs.toLowerCase();
+
+      if (!rawArgs || rawLower === 'status') {
+        const ws = cliChannel.getWorkspace();
+        await channel.send(ws?.active ? `Workspace active: ${ws.rootPath}` : 'No active workspace. Use `/ws open <path>`.', channelId);
+        return true;
+      }
+
+      if (rawLower.startsWith('open ')) {
+        const target = rawArgs.slice(5).trim();
+        const opened = cliChannel.openWorkspace(target);
+        if (opened.ok) {
+          this.capabilities.setCwd(path.resolve(target.replace(/^~(?=$|\/)/, process.env.HOME || '~')));
+          this.capabilities.permissions.addTempScope(this.capabilities.getCwd(), true, true);
+          this.programmingMode.setExecute();
+          this.programmingMode.setProjectContext(this.capabilities.getCwd());
+          cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
+          await channel.send(`${opened.message}\nWorkspace IDE is ready.`, channelId);
+        } else {
+          await channel.send(opened.message, channelId);
+        }
+        return true;
+      }
+
+      if (rawLower === 'refresh') {
+        cliChannel.refreshWorkspace();
+        await channel.send('Workspace refreshed.', channelId);
+        return true;
+      }
+
+      if (rawLower.startsWith('stage ')) {
+        const fileArg = rawArgs.slice(6).trim();
+        const result = cliChannel.stageWorkspaceFile(fileArg || 'all');
+        await channel.send(result.message, channelId);
+        return true;
+      }
+
+      if (rawLower.startsWith('commit ')) {
+        const message = rawArgs.slice(7).trim();
+        const result = cliChannel.commitWorkspace(message);
+        await channel.send(result.message, channelId);
+        return true;
+      }
+
+      if (rawLower.startsWith('undo ')) {
+        const fileArg = rawArgs.slice(5).trim();
+        const result = cliChannel.undoWorkspaceFile(fileArg);
+        await channel.send(result.message, channelId);
+        return true;
+      }
+
+      if (rawLower === 'help') {
+        await channel.send('Workspace commands:\n`/ws open <path>`\n`/ws refresh`\n`/ws stage <file|all>`\n`/ws commit <message>`\n`/ws undo <file>`\n`/ws status`', channelId);
+        return true;
+      }
+
+      await channel.send('Unknown workspace command. Use `/ws help`.', channelId);
       return true;
     }
 
@@ -2160,6 +2675,32 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
     }
 
     return false;
+  }
+
+  private async handleWorkspaceNaturalLanguage(content: string, channelType: string, channelId: string): Promise<boolean> {
+    const channel = this.channels.get(channelType as any);
+    if (!channel || channelType !== 'cli' || !(channel instanceof CLIChannel)) return false;
+
+    const trimmed = content.trim();
+    const commandMatch = trimmed.match(/^(?:open|use|enter)\s+workspace(?:\s+(.+))?$/i);
+    if (!commandMatch) return false;
+
+    const targetRaw = (commandMatch[1] || '').trim();
+    const target = targetRaw || this.capabilities.getCwd();
+    const opened = channel.openWorkspace(target);
+    if (!opened.ok) {
+      await channel.send(opened.message, channelId);
+      return true;
+    }
+
+    const resolved = path.resolve(target.replace(/^~(?=$|\/)/, process.env.HOME || '~'));
+    this.capabilities.setCwd(resolved);
+    this.capabilities.permissions.addTempScope(resolved, true, true);
+    this.programmingMode.setExecute();
+    this.programmingMode.setProjectContext(resolved);
+    channel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
+    await channel.send(`Workspace opened from conversation intent: ${resolved}`, channelId);
+    return true;
   }
 
   private async openCliCommandMenu(channel: CLIChannel, channelId: string): Promise<void> {

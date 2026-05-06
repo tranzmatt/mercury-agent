@@ -21,7 +21,7 @@ npm i -g @cosmicstack/mercury-agent
 mercury
 ```
 
-首次运行会启动配置向导。你需要输入姓名、模型 API Key，并可选择配置 Telegram Bot Token。之后如需重新配置：
+首次运行会启动配置向导（姓名、模型、可选 Telegram）。完成后会进入 Ink TUI 启动画面，并在进入聊天前让你选择权限模式（`Ask Me` / `Allow All`）。之后如需重新配置：
 
 ```bash
 mercury doctor
@@ -76,7 +76,7 @@ mercury status       # 查看运行状态
 | `mercury restart` | 重启后台进程 |
 | `mercury stop` | 停止后台进程 |
 | `mercury logs` | 查看近期日志 |
-| `mercury doctor` | 重新配置，回车保留现有值 |
+| `mercury doctor` | 重新配置 Mercury（姓名、Provider、频道、权限默认项） |
 | `mercury setup` | 重新运行配置向导 |
 | `mercury status` | 查看配置和守护进程状态 |
 | `mercury help` | 查看完整手册 |
@@ -110,6 +110,9 @@ mercury status       # 查看运行状态
 | `/budget reset` | 将用量重置为零 |
 | `/budget set <n>` | 修改每日 Token 预算 |
 | `/permissions` | 修改权限模式 |
+| `/view` | 切换进度视图（balanced/detailed） |
+| `/view balanced` | 使用精简进度视图 |
+| `/view detailed` | 使用详细进度视图 |
 | `/tasks` | 列出定时任务 |
 | `/memory` | 查看和管理 Second Brain 记忆 |
 | `/unpair` | Telegram：重置所有访问 |
@@ -131,7 +134,7 @@ mercury status       # 查看运行状态
 
 | 渠道 | 能力 |
 |------|------|
-| CLI | Readline 提示符、方向键命令菜单、实时文本流、Markdown 重渲染、权限模式选择 |
+| CLI | Ink TUI、启动权限模式选择、交互式权限审批（方向键 + Enter，支持 Y/N/A 快捷键）、balanced/detailed 进度视图、实时文本流 |
 | Telegram | HTML 格式化、可编辑流式消息、文件上传、输入状态、多用户访问和管理员/成员角色 |
 
 ### Telegram 访问模型

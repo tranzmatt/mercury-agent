@@ -28,6 +28,21 @@ Type these during a conversation with Mercury. Most work in both CLI and Telegra
 | `/budget reset` | Reset usage to zero |
 | `/budget set <n>` | Change daily token budget |
 | `/permissions` | Change permission mode (Ask Me / Allow All) — Telegram only |
+| `/models` | List configured models/providers and switch active model for this session |
+| `/models use <provider>` | Switch the current session model/provider |
+| `/models doctor` | Show how to add/configure models via `mercury doctor` |
+| `/view` | Toggle progress view (balanced/detailed) |
+| `/view balanced` | Set compact progress view |
+| `/view detailed` | Set full progress view |
+| `/code agent <task>` | Delegate a coding task to a sub-agent in the background |
+| `/ws exit` | Exit workspace IDE mode back to general chat |
+| `/bg <command>` | Run a shell command in the background |
+| `/bg: <task>` | Run a natural-language sub-agent task in background |
+| `/bg current` | Move the current in-flight task to background |
+| `/bg list` | Show background tasks |
+| `/bg <id>` | Show details/output for one background task |
+| `/bg cancel <id>` | Cancel a running background task |
+| `/bg clear` | Prune completed background tasks |
 | `/tasks` | List scheduled tasks |
 | `/memory` | View and manage second brain memory |
 | `/unpair` | Telegram only: reset all access, new users can /start again |

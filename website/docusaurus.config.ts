@@ -67,10 +67,6 @@ const config: Config = {
     },
     navbar: {
       title: '☿ Mercury',
-      logo: {
-        alt: 'Mercury',
-        src: 'img/favicon.svg',
-      },
       items: [
         {to: '/docs', label: 'Docs', position: 'left'},
         {
