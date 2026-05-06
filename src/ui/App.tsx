@@ -80,6 +80,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   const { exit } = useApp();
   const [input, setInput] = React.useState('');
   const [permIdx, setPermIdx] = React.useState(0);
+  const permIdxRef = React.useRef(0);
   const [menuIdx, setMenuIdx] = React.useState(0);
   const [spotifyIdx, setSpotifyIdx] = React.useState(6);
   const [splashPhase, setSplashPhase] = React.useState<'logo' | 'skills' | 'provider' | 'ready'>('logo');
@@ -251,11 +252,20 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   React.useEffect(() => {
     if (state.permissionPrompt) {
       setPermIdx(0);
+      permIdxRef.current = 0;
     }
   }, [state.permissionPrompt]);
 
   useInput((ch, key) => {
     const keyChar = (ch || (key as any)?.name || '').toLowerCase();
+    const isEnter = key.return || (key as any)?.name === 'enter';
+    const resolvePermissionAndMaybeContinue = (value: string | boolean) => {
+      const shouldAutoEnterChat = state.mode === 'splash' && state.permissionPrompt?.type === 'mode';
+      onPermissionResolve(value);
+      if (shouldAutoEnterChat) {
+        onInput('/chat');
+      }
+    };
 
     if (ch === '\u0003' || (key.ctrl && ((key as any).name === 'c' || ch?.toLowerCase?.() === 'c'))) {
       onExit();
@@ -267,7 +277,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
         setShowStartupDetails((v) => !v);
         return;
       }
-      if (!state.permissionPrompt && key.return) {
+      if (!state.permissionPrompt && isEnter) {
         onInput('/chat');
         return;
       }
@@ -280,42 +290,51 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
         if (lower === 'y') {
           const yes = options.find((opt) => opt.value === 'yes');
           if (yes) {
-            onPermissionResolve(yes.value);
+            resolvePermissionAndMaybeContinue(yes.value);
             return;
           }
         }
         if (lower === 'n') {
           const no = options.find((opt) => opt.value === 'no');
           if (no) {
-            onPermissionResolve(no.value);
+            resolvePermissionAndMaybeContinue(no.value);
             return;
           }
         }
         if (lower === 'a') {
           const always = options.find((opt) => opt.value === 'always');
           if (always) {
-            onPermissionResolve(always.value);
+            resolvePermissionAndMaybeContinue(always.value);
             return;
           }
         }
 
-        if (key.upArrow) setPermIdx((i) => Math.max(0, i - 1));
-        else if (key.downArrow) setPermIdx((i) => Math.min(options.length - 1, i + 1));
-        else if (key.return) {
-          if (options[permIdx]) onPermissionResolve(options[permIdx].value);
+        if (key.upArrow) {
+          const next = Math.max(0, permIdxRef.current - 1);
+          permIdxRef.current = next;
+          setPermIdx(next);
+        }
+        else if (key.downArrow) {
+          const next = Math.min(options.length - 1, permIdxRef.current + 1);
+          permIdxRef.current = next;
+          setPermIdx(next);
+        }
+        else if (isEnter) {
+          const selected = options[permIdxRef.current] || options[0];
+          if (selected) resolvePermissionAndMaybeContinue(selected.value);
         } else if (key.escape) {
-          onPermissionResolve(state.permissionPrompt.type === 'mode' ? 'ask-me' : 'no');
+          resolvePermissionAndMaybeContinue(state.permissionPrompt.type === 'mode' ? 'ask-me' : 'no');
         }
         return;
       }
 
       if (state.permissionPrompt.type === 'continue') {
-        if (ch === 'y' || ch === 'Y') onPermissionResolve(true);
-        else if (ch === 'n' || ch === 'N') onPermissionResolve(false);
+        if (ch === 'y' || ch === 'Y') resolvePermissionAndMaybeContinue(true);
+        else if (ch === 'n' || ch === 'N') resolvePermissionAndMaybeContinue(false);
         return;
       }
       if (state.permissionPrompt.type === 'ask') {
-        if (key.return) onPermissionResolve('');
+        if (isEnter) resolvePermissionAndMaybeContinue('');
         return;
       }
       return;
@@ -369,7 +388,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       return;
     }
 
-    if (key.return) {
+    if (isEnter) {
       const trimmed = input.trim();
       if (trimmed) {
         onInput(trimmed);
@@ -430,7 +449,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
         if (workspacePane === 'files') onInput('/ws expand');
         return;
       }
-      if (navMode && key.return) {
+      if (navMode && isEnter) {
         if (workspacePane === 'files') onInput('/ws open-selected');
         else if (workspacePane === 'git') {
           const picked = state.workspace?.gitFiles[gitCursor];
@@ -470,7 +489,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       return;
     }
 
-    if (key.return) return;
+    if (isEnter) return;
 
     if (key.tab) {
       if (input.startsWith('/') && slashSuggestions.length > 0) {
