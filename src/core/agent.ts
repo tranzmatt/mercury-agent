@@ -11,6 +11,7 @@ import type { TokenBudget } from '../utils/tokens.js';
 import type { CapabilityRegistry } from '../capabilities/registry.js';
 import type { ScheduledTaskManifest } from './scheduler.js';
 import { DeepSeekProvider } from '../providers/deepseek.js';
+import { ProviderRegistry as ProviderRegistryImpl } from '../providers/registry.js';
 import { Lifecycle } from './lifecycle.js';
 import { Scheduler } from './scheduler.js';
 import { ProgrammingMode } from './programming-mode.js';
@@ -35,6 +36,7 @@ import {
   rejectTelegramPendingRequest,
   removeTelegramUser,
   saveConfig,
+  getActiveProviders,
 } from '../utils/config.js';
 
 class ToolCallLoopDetector {
@@ -710,6 +712,25 @@ export class Agent {
     }
 
     this.processing = false;
+  }
+
+  private switchSessionProvider(providerName: string): { ok: boolean; message: string } {
+    const active = getActiveProviders(this.config).map((p) => p.name);
+    if (!active.includes(providerName)) {
+      return { ok: false, message: `Provider \`${providerName}\` is not configured. Run \`mercury doctor\` to add/configure models.` };
+    }
+
+    this.config.providers.default = providerName as any;
+    this.providers = new ProviderRegistryImpl(this.config);
+    const selected = this.providers.getDefault();
+    const model = selected.getModel();
+
+    const cliChannel = this.channels.get('cli');
+    if (cliChannel && cliChannel instanceof CLIChannel) {
+      cliChannel.setProvider(providerName, model);
+    }
+
+    return { ok: true, message: `Session model switched to **${providerName}** · **${model}**.` };
   }
 
   async birth(): Promise<void> {
@@ -1778,6 +1799,63 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
         `Skills: ${ctx.skillNames().length > 0 ? ctx.skillNames().join(', ') : 'none'}`,
       ];
       await channel.send(lines.join('\n'), channelId);
+      return true;
+    }
+
+    if (cmd === '/models' || cmd === '/model' || cmd.startsWith('/models ') || cmd.startsWith('/model ')) {
+      const base = cmd.startsWith('/model ') || cmd === '/model' ? '/model' : '/models';
+      const rawArgs = trimmed.slice(base.length).trim();
+      const activeProviders = getActiveProviders(this.config);
+      const current = this.providers.getDefault();
+
+      if (!rawArgs) {
+        const lines = [
+          '**Session Models**',
+          '',
+          ...activeProviders.map((p) => {
+            const marker = p.name === current.name ? ' ← current' : '';
+            return `• ${p.name} · ${p.model}${marker}`;
+          }),
+          '',
+          'Use `/models use <provider>` to switch for this session.',
+          'Use `mercury doctor` to add/configure models.',
+        ];
+        await channel.send(lines.join('\n'), channelId);
+
+        if (channelType === 'cli' && channel instanceof CLIChannel && activeProviders.length > 1) {
+          const choices = [
+            ...activeProviders.map((p) => `${p.name} · ${p.model}${p.name === current.name ? ' (current)' : ''}`),
+            'Open doctor instructions',
+            'Keep current model',
+          ];
+          const picked = await this.presentChoice('Switch session model?', choices, channelId, channelType);
+          if (picked === 'Open doctor instructions') {
+            await channel.send('Run `mercury doctor` and update provider/model settings. Then restart Mercury to persist defaults.', channelId);
+            return true;
+          }
+          if (picked === 'Keep current model') return true;
+          const providerName = picked.split(' · ')[0].trim();
+          if (providerName && providerName !== current.name) {
+            const switched = this.switchSessionProvider(providerName);
+            await channel.send(switched.message, channelId);
+          }
+        }
+        return true;
+      }
+
+      if (rawArgs === 'doctor' || rawArgs === 'add') {
+        await channel.send('Use `mercury doctor` to add/configure models. Then use `/models` to switch active session model.', channelId);
+        return true;
+      }
+
+      const target = rawArgs.replace(/^use\s+/i, '').trim();
+      if (!target) {
+        await channel.send('Usage: `/models` or `/models use <provider>`', channelId);
+        return true;
+      }
+
+      const switched = this.switchSessionProvider(target);
+      await channel.send(switched.message, channelId);
       return true;
     }
 

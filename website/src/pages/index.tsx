@@ -272,6 +272,7 @@ export default function LandingPage(): React.ReactElement {
             <div className="lp-hero-actions">
               <Link href="#how-it-works" className="lp-btn lp-btn-primary">Get Started</Link>
               <Link href="#demo" className="lp-btn lp-btn-secondary">See it in action</Link>
+              <Link to="/docs" className="lp-btn lp-btn-secondary">Read Docs</Link>
             </div>
             <div className="lp-hero-install">
               <code>npm i -g @cosmicstack/mercury-agent && mercury</code>

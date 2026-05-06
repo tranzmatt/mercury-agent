@@ -114,6 +114,8 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     '/budget',
     '/permissions',
     '/memory',
+    '/models',
+    '/models use ',
     '/agents',
     '/bg',
     '/bg current',
