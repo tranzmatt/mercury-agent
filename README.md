@@ -21,6 +21,10 @@
 </p>
 
 <p align="center">
+  <strong>🔖 Current Stable: v1.1.6</strong>
+</p>
+
+<p align="center">
   English | <a href="README.zh-CN.md">简体中文</a>
 </p>
 
