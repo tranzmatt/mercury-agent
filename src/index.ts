@@ -1035,6 +1035,44 @@ function autoDaemonize(): void {
   console.log('');
 }
 
+function runPlatformDoctor(): void {
+  const daemon = getDaemonStatus();
+  const termProgram = process.env.TERM_PROGRAM || 'unknown';
+  const term = process.env.TERM || 'unknown';
+  const isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const rawModeSupported = Boolean(process.stdin.isTTY && typeof (process.stdin as NodeJS.ReadStream).setRawMode === 'function');
+  const sshSession = Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY);
+  const ci = process.env.CI === 'true';
+  const canInlineArt = termProgram === 'iTerm.app' && !sshSession && !ci;
+
+  console.log('');
+  console.log(chalk.bold.cyan('  Mercury Platform Doctor'));
+  console.log(chalk.dim('  Cross-platform runtime compatibility report'));
+  console.log('');
+  console.log(`  OS:                 ${chalk.white(process.platform)} (${process.arch})`);
+  console.log(`  Node.js:            ${chalk.white(process.version)} (required >= 20)`);
+  console.log(`  Terminal program:   ${chalk.white(termProgram)}`);
+  console.log(`  TERM:               ${chalk.white(term)}`);
+  console.log(`  Interactive TTY:    ${isTTY ? chalk.green('yes') : chalk.yellow('no')}`);
+  console.log(`  Raw mode support:   ${rawModeSupported ? chalk.green('yes') : chalk.yellow('no')}`);
+  console.log(`  SSH session:        ${sshSession ? chalk.yellow('yes') : chalk.green('no')}`);
+  console.log(`  CI environment:     ${ci ? chalk.yellow('yes') : chalk.green('no')}`);
+  console.log(`  Daemon:             ${daemon.running ? chalk.green(`running (PID: ${daemon.pid})`) : chalk.dim('not running')}`);
+  console.log(`  Spotify inline art: ${canInlineArt ? chalk.green('supported (iTerm local)') : chalk.dim('disabled/fallback mode')}`);
+  console.log('');
+  console.log(chalk.bold.white('  Keybinding Notes'));
+  console.log(`  • View toggle:      ${chalk.white('Ctrl+V')} (fallback: ${chalk.white('/view')})`);
+  console.log(`  • Workspace exit:   ${chalk.white('Esc')} or ${chalk.white('Ctrl+Q')} (fallback: ${chalk.white('/ws exit')})`);
+  console.log(`  • Code mode switch: ${chalk.white('Ctrl+P')} plan, ${chalk.white('Ctrl+X')} execute`);
+  console.log('');
+
+  if (!rawModeSupported) {
+    console.log(chalk.yellow('  Warning: Raw mode is unavailable; interactive Ink input may be limited in this terminal.'));
+    console.log(chalk.dim('  Try a local terminal session with TTY support for the best experience.'));
+    console.log('');
+  }
+}
+
 async function runAgent(isDaemon: boolean = false): Promise<void> {
   let config = loadConfig();
   config = ensureCreatorField(config);
@@ -1426,7 +1464,12 @@ program
 program
   .command('doctor')
   .description('Reconfigure Mercury setup (name, providers, channels, permissions defaults)')
-  .action(async () => {
+  .option('--platform', 'Show platform compatibility diagnostics')
+  .action(async (opts) => {
+    if (opts.platform) {
+      runPlatformDoctor();
+      return;
+    }
     if (isSetupComplete()) {
       await configure(loadConfig());
     } else {

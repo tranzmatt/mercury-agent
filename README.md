@@ -45,6 +45,7 @@ To reconfigure later (change keys, name, settings):
 
 ```bash
 mercury doctor
+mercury doctor --platform
 ```
 
 ## Why Mercury?
@@ -116,6 +117,7 @@ In daemon mode, Telegram becomes your primary channel — CLI is log-only since 
 | `mercury stop` | Stop a background process |
 | `mercury logs` | View recent daemon logs |
 | `mercury doctor` | Reconfigure setup (name, providers, channels, permissions defaults) |
+| `mercury doctor --platform` | Show cross-platform terminal/daemon compatibility diagnostics |
 | `mercury setup` | Re-run the setup wizard |
 | `mercury status` | Show config and daemon status |
 | `mercury help` | Show full manual |
@@ -152,6 +154,8 @@ Type these during a conversation — they don't consume API tokens. Work on both
 | `/view` | Toggle progress view (balanced/detailed) |
 | `/view balanced` | Set compact progress view |
 | `/view detailed` | Set full progress view |
+| `/code agent <task>` | Delegate a coding task to a sub-agent in background |
+| `/ws exit` | Exit workspace IDE mode back to general chat |
 | `/tasks` | List scheduled tasks |
 | `/memory` | View and manage second brain memory |
 | `/unpair` | Telegram: reset all access |
@@ -175,6 +179,21 @@ Type these during a conversation — they don't consume API tokens. Work on both
 |---------|----------|
 | **CLI** | Ink TUI, startup permission mode picker, interactive permission prompts (arrow keys + Enter; Y/N/A shortcuts), progress views (balanced/detailed), real-time streaming |
 | **Telegram** | HTML formatting, editable streaming messages, file uploads, typing indicators, multi-user access with admin/member roles |
+
+### Workspace/Coding Shortcuts (CLI)
+
+- `Ctrl+P` → switch to Plan mode
+- `Ctrl+X` → switch to Execute mode
+- `Esc` or `Ctrl+Q` → exit workspace to general chat
+- `Ctrl+V` → toggle progress view (`/view` is fallback when terminal intercepts Ctrl+V)
+
+### Spotify UI Notes (CLI)
+
+- Spotify deck supports keyboard shortcuts: `N` next, `P` previous, `+/-` volume, `Z` now playing.
+- Inline album art is optional and safe-gated:
+  - Enable with `MERCURY_SPOTIFY_ART=1`
+  - Currently renders only in local iTerm sessions
+  - Automatically falls back to text-only UI in SSH/mobile/light terminals
 
 ### Telegram Access
 
