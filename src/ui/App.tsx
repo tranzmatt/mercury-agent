@@ -104,6 +104,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     '/view detailed',
     '/ws',
     '/ws open ',
+    '/ws exit',
     '/ws refresh',
     '/ws stage all',
     '/ws commit ',
@@ -281,6 +282,11 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     }
 
     if (state.mode === 'workspace') {
+      if (key.escape || (key.ctrl && (ch === 'q' || ch === 'Q'))) {
+        onInput('/ws exit');
+        return;
+      }
+
       if (key.ctrl && (ch === 'p' || ch === 'P')) {
         onInput('/code plan');
         return;
@@ -584,7 +590,7 @@ function ChatBody({ state }: { state: TuiState }) {
       <Box flexDirection="column" flexGrow={1}>
         <ChatMessagesView messages={state.chatMessages} agentName={state.agentName} />
         {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
-        {state.isThinking && <ThinkingIndicator agentName={state.agentName} steps={state.toolSteps} />}
+        {state.isThinking && <ThinkingIndicator agentName={state.agentName} steps={state.toolSteps} mode={state.mode} />}
         {state.subAgents.length > 0 && <AgentPanelView agents={state.subAgents} />}
       </Box>
     </Box>
@@ -623,7 +629,7 @@ function CodingBody({ state }: { state: TuiState }) {
       <Box flexDirection="column" flexGrow={1}>
         <ChatMessagesView messages={state.chatMessages} agentName={state.agentName} />
         {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
-        {state.isThinking && <ThinkingIndicator agentName={state.agentName} steps={state.toolSteps} />}
+        {state.isThinking && <ThinkingIndicator agentName={state.agentName} steps={state.toolSteps} mode={state.mode} />}
         <Box paddingX={1} marginTop={1}>
           <Text dimColor>Mode shortcuts: Ctrl+P Plan · Ctrl+X Execute</Text>
         </Box>
@@ -736,10 +742,10 @@ function WorkspaceBody({ state, workspacePane, detailCursor, gitCursor }: { stat
         <Text dimColor>Ask implementation questions, refactors, tests, and git actions for this project context.</Text>
         <ChatMessagesView messages={state.chatMessages} agentName={state.agentName} />
         {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
-        {state.isThinking && <ThinkingIndicator agentName={state.agentName} steps={state.toolSteps} />}
+        {state.isThinking && <ThinkingIndicator agentName={state.agentName} steps={state.toolSteps} mode={state.mode} />}
       </Box>
       <Box paddingX={1}>
-        <Text dimColor>Ctrl+P Plan · Ctrl+X Execute · Ctrl+E Explorer · Ctrl+G Git · Empty input = IDE navigation</Text>
+        <Text dimColor>Esc/Ctrl+Q Exit Workspace · Ctrl+P Plan · Ctrl+X Execute · Ctrl+E Explorer · Ctrl+G Git</Text>
       </Box>
     </Box>
   );
@@ -851,9 +857,11 @@ function ToolStepsView({ steps, viewMode }: { steps: ToolStep[]; viewMode: 'bala
   );
 }
 
-function ThinkingIndicator({ agentName, steps }: { agentName: string; steps: ToolStep[] }) {
+function ThinkingIndicator({ agentName, steps, mode }: { agentName: string; steps: ToolStep[]; mode: AppMode }) {
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-  const phases = ['indexing symbols', 'building plan', 'running checks', 'linking context'];
+  const codingPhases = ['indexing symbols', 'building plan', 'running checks', 'linking context'];
+  const chatPhases = ['reading your message', 'gathering context', 'drafting response', 'polishing answer'];
+  const phases = (mode === 'coding' || mode === 'workspace') ? codingPhases : chatPhases;
   const [frame, setFrame] = React.useState(0);
 
   React.useEffect(() => {
@@ -1008,7 +1016,7 @@ function InputBox({
         <Text dimColor>█</Text>
       </Box>
       <Box paddingX={1}>
-        <Text dimColor>{inWorkspace ? 'IDE chat active. Ctrl+P Plan · Ctrl+X Execute · Enter sends prompt.' : inCoding ? 'Coding chat active. Ctrl+P Plan · Ctrl+X Execute.' : 'Type a prompt, then Enter.'}</Text>
+        <Text dimColor>{inWorkspace ? 'IDE chat active. Esc exits workspace. Ctrl+P Plan · Ctrl+X Execute.' : inCoding ? 'Coding chat active. Ctrl+P Plan · Ctrl+X Execute.' : 'Type a prompt, then Enter.'}</Text>
       </Box>
     </Box>
   );

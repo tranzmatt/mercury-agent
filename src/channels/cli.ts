@@ -190,6 +190,10 @@ export class CLIChannel extends BaseChannel {
         this.toggleOrSelectWorkspaceNode();
         return;
       }
+      if (trimmed === '/ws exit' || trimmed === '/workspace exit' || trimmed === '/general') {
+        this.exitWorkspaceToChat();
+        return;
+      }
       if (trimmed === '/ws close-file') {
         this.closeWorkspaceFile();
         return;
@@ -650,6 +654,17 @@ export class CLIChannel extends BaseChannel {
     const ws = this.state.workspace;
     if (!ws?.active) return;
     this.update({ workspace: { ...ws, openedFilePath: null, openedFilePreview: [], lastAction: 'Closed file preview' } });
+  }
+
+  private exitWorkspaceToChat(): void {
+    const ws = this.state.workspace;
+    const nextWorkspace = ws ? { ...ws, active: false, lastAction: 'Exited workspace mode' } : null;
+    this.update({
+      mode: 'chat',
+      workspace: nextWorkspace,
+      programmingMode: 'off',
+      projectContext: null,
+    });
   }
 
   private readFilePreview(filePath: string): string[] {
