@@ -64,3 +64,21 @@ Shows whether the daemon is running, its PID, and the log file path.
 :::info Crash recovery
 Background mode includes a watchdog. If Mercury crashes, it restarts automatically with exponential backoff (1s, 1.25s, 1.56s...). After 10 crashes within 60 seconds, it exits to prevent crash loops. Stale PID files are auto-cleaned on startup to prevent "already running" false positives.
 :::
+
+## Background Tasks and Workers
+
+Daemon mode supports async background execution for both shell commands and delegated sub-agent work.
+
+### Shell background tasks
+
+- Start with `/bg <command>`
+- Inspect with `/bg list` and `/bg <id>`
+- Cancel with `/bg cancel <id>`
+
+### Sub-agent workers
+
+- Delegate coding with `/code agent <task>` or `/bg: <task>`
+- Move active task to worker with `/bg current`
+- Worker progress/completion is surfaced in the shared background task board (`/bg list`)
+
+These workers are designed to keep Mercury responsive while long-running work continues.
