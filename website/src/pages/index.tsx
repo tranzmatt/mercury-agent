@@ -448,7 +448,7 @@ export default function LandingPage(): React.ReactElement {
             <div className="lp-arch-grid">
               {[
                 { label: 'Core', value: 'TypeScript + Node.js 18+', desc: 'ESM, tsup build, SQLite-backed second brain' },
-                { label: 'AI SDK', value: 'Vercel AI SDK v4', desc: 'streamText + generateText, 10-step agentic loop' },
+                { label: 'AI SDK', value: 'Vercel AI SDK v6', desc: 'streamText + generateText, 10-step agentic loop' },
                 { label: 'Sub-Agents', value: 'Same-process async coroutines', desc: 'Parallel task delegation, file locks, resource-aware concurrency' },
                 { label: 'Spotify', value: 'Native Web API integration', desc: 'OAuth2 auth, 14 tools, DJ mode skill, Premium + free support' },
                 { label: 'Providers', value: 'DeepSeek · OpenAI · Anthropic · Grok · Ollama Cloud · Ollama Local', desc: 'Validated onboarding, model discovery, and fallback with last-successful tracking' },
