@@ -60,6 +60,8 @@ Every AI agent can read files, run commands, and fetch URLs. Most do it silently
 - **Always on** — Run as a background daemon on any OS. Auto-restarts on crash. Starts on boot. Cron scheduling, heartbeat monitoring, and proactive notifications.
 - **Extensible** — Install community skills with a single command. Schedule skills as recurring tasks. Based on the [Agent Skills](https://agentskills.io) specification.
 
+Mercury now seeds a default `web-search` skill on first run in `~/.mercury/skills/web-search/SKILL.md`.
+
 ## Daemon Mode
 
 **One command to make Mercury persistent:**

@@ -4,6 +4,7 @@ import { parse as parseYaml } from 'yaml';
 import { getMercuryHome } from '../utils/config.js';
 import type { SkillDiscovery, Skill, SkillMeta } from './types.js';
 import { logger } from '../utils/logger.js';
+import { DEFAULT_SKILL_SEEDS } from './default-skills.js';
 
 const SKILL_FILE = 'SKILL.md';
 
@@ -40,8 +41,9 @@ export class SkillLoader {
     if (!existsSync(this.skillsDir)) {
       mkdirSync(this.skillsDir, { recursive: true });
       this.seedTemplate();
-      return [];
     }
+
+    this.ensureDefaultSkills();
 
     const entries = readdirSync(this.skillsDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -153,5 +155,17 @@ Describe what this skill enables Mercury to do. When invoked via the use_skill t
 
     writeFileSync(join(templateDir, SKILL_FILE), content, 'utf-8');
     logger.info('Seeded template skill');
+  }
+
+  private ensureDefaultSkills(): void {
+    for (const seed of DEFAULT_SKILL_SEEDS) {
+      const skillDir = join(this.skillsDir, seed.dirName);
+      const skillFile = join(skillDir, seed.fileName);
+      if (existsSync(skillFile)) continue;
+
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(skillFile, seed.content, 'utf-8');
+      logger.info({ skill: seed.dirName }, 'Seeded default skill');
+    }
   }
 }
