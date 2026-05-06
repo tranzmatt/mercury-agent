@@ -308,6 +308,23 @@ export class Agent {
         await channel.send(message, channelId).catch(() => {});
       }
     });
+    supervisor.setLifecycleCallback((event) => {
+      const bgTask = this.backgroundTasks.getByAgentId(event.agentId);
+      if (!bgTask) return;
+
+      if (event.type === 'progress' && event.progress) {
+        this.backgroundTasks.updateAgentProgress(bgTask.id, event.progress);
+        this.syncBgTasksToTui();
+        return;
+      }
+
+      if (event.type === 'complete' && event.result) {
+        const result = event.result;
+        const status = result.status === 'completed' ? 'completed' : result.status === 'halted' ? 'cancelled' : 'failed';
+        this.backgroundTasks.completeAgentTask(bgTask.id, status === 'completed' ? 0 : 1, status, result.output);
+        this.syncBgTasksToTui();
+      }
+    });
   }
 
   private enqueueMessage(msg: ChannelMessage): void {
@@ -2039,6 +2056,29 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
         return true;
       }
 
+      if (rawArgs.startsWith('agent ') || rawArgs.startsWith('delegate ')) {
+        if (!this.supervisor) {
+          await channel.send('Sub-agents are not enabled in this environment.', channelId);
+          return true;
+        }
+        const taskDescription = rawArgs.replace(/^(agent|delegate)\s+/, '').trim();
+        if (!taskDescription) {
+          await channel.send('Usage: `/code agent <task>`', channelId);
+          return true;
+        }
+        const cwd = this.capabilities.getCwd();
+        const agentId = await this.supervisor.spawn({
+          task: taskDescription,
+          sourceChannelId: channelId,
+          sourceChannelType: channelType as any,
+          workingDirectory: cwd,
+        });
+        const bgId = this.backgroundTasks.spawnAgent(taskDescription, cwd, agentId);
+        this.syncBgTasksToTui();
+        await channel.send(`Started coding sub-agent ${agentId} in background task ${bgId}. Use /bg ${bgId} for progress.`, channelId);
+        return true;
+      }
+
       if (rawArgs === 'off' || rawArgs === 'exit') {
         this.programmingMode.setOff();
         if (cliChannel) cliChannel.setProgrammingStatus(this.programmingMode.getState(), this.programmingMode.getProjectContext());
@@ -2054,7 +2094,7 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
         return true;
       }
 
-      await channel.send('Unknown /code command. Available: /code, /code plan, /code execute, /code build, /code workspace, /code off, /code toggle', channelId);
+      await channel.send('Unknown /code command. Available: /code, /code plan, /code execute, /code build, /code workspace, /code agent <task>, /code off, /code toggle', channelId);
       return true;
     }
 

@@ -14,6 +14,7 @@ import { ResourceManager } from './resource-manager.js';
 import { logger } from '../utils/logger.js';
 
 export type NotifyCallback = (channelType: string, channelId: string, message: string) => Promise<void>;
+export type AgentLifecycleCallback = (event: { type: 'progress' | 'complete'; agentId: string; progress?: string; result?: SubAgentResult }) => void;
 
 export class SubAgentSupervisor {
   private activeAgents: Map<string, SubAgent> = new Map();
@@ -34,6 +35,7 @@ export class SubAgentSupervisor {
   private channels: ChannelRegistry;
 
   private notifyCallback?: NotifyCallback;
+  private lifecycleCallback?: AgentLifecycleCallback;
   private pausedAgents: Set<string> = new Set();
   private pauseResolvers: Map<string, () => void> = new Map();
 
@@ -70,6 +72,10 @@ export class SubAgentSupervisor {
 
   setNotifyCallback(cb: NotifyCallback): void {
     this.notifyCallback = cb;
+  }
+
+  setLifecycleCallback(cb: AgentLifecycleCallback): void {
+    this.lifecycleCallback = cb;
   }
 
   private async notify(channelType: string, channelId: string, message: string): Promise<void> {
@@ -153,6 +159,7 @@ export class SubAgentSupervisor {
 
     subAgent.setProgressCallback((agentId, progress) => {
       this.taskBoard.update(agentId, { progress });
+      this.lifecycleCallback?.({ type: 'progress', agentId, progress });
 
       const entry = this.taskBoard.get(agentId);
       if (entry) {
@@ -187,6 +194,7 @@ export class SubAgentSupervisor {
     this.pausedAgents.delete(agentId);
 
     logger.info({ agentId, status: result.status, duration: result.duration }, 'Sub-agent completed');
+    this.lifecycleCallback?.({ type: 'complete', agentId, result });
 
     const entry = this.taskBoard.get(agentId);
     if (entry) {
