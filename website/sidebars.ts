@@ -33,6 +33,7 @@ const sidebars: SidebarsConfig = {
         'integrations/github-companion',
         'integrations/telegram',
         'integrations/spotify',
+        'integrations/coding-workspace',
         'integrations/sub-agents',
       ],
     },
