@@ -790,10 +790,6 @@ export class Agent {
 
       const systemPrompt = this.buildSystemPrompt();
       const recentMemory = this.shortTerm.getRecent(msg.channelId, 10);
-      const cliChannel = msg.channelType === 'cli' ? this.channels.get('cli') : null;
-      const workspace = cliChannel && cliChannel instanceof CLIChannel ? cliChannel.getWorkspace() : null;
-      const isWorkspaceScoped = Boolean(workspace?.active);
-      const workspacePath = workspace?.rootPath || this.capabilities.getCwd();
 
       const messages: any[] = [];
 
@@ -838,7 +834,7 @@ export class Agent {
         messages.push({ role: 'assistant', content: 'Acknowledged. I will stop repeating and respond differently, or clearly state if the task cannot be completed.' });
       }
 
-      if (!isWorkspaceScoped && this.userMemory) {
+      if (this.userMemory) {
         const memoryContext = this.userMemory.retrieveRelevant(msg.content, { maxRecords: 5, maxChars: 900 });
         if (memoryContext.context) {
           messages.push({
@@ -847,7 +843,7 @@ export class Agent {
           });
           messages.push({ role: 'assistant', content: 'Noted. I\'ll keep this in mind.' });
         }
-      } else if (!isWorkspaceScoped) {
+      } else {
         const relevantFacts = this.longTerm.search(msg.content, 3);
         if (relevantFacts.length > 0) {
           messages.push({
@@ -858,15 +854,7 @@ export class Agent {
         }
       }
 
-      if (isWorkspaceScoped) {
-        messages.push({
-          role: 'user',
-          content: `Workspace IDE mode is active for project: ${workspacePath}. Treat this as a coding-only session for this repository. Ignore unrelated personal/history context (music, casual chat, prior non-code tasks). If the user asks a non-coding question, redirect briefly to repository-focused help.`,
-        });
-        messages.push({ role: 'assistant', content: 'Understood. I will stay scoped to this repository and coding tasks only.' });
-      }
-
-      if (!isWorkspaceScoped && recentMemory.length > 0) {
+      if (recentMemory.length > 0) {
         for (const m of recentMemory) {
           messages.push({
             role: m.role === 'user' ? 'user' : 'assistant',
