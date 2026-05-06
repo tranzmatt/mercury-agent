@@ -51,6 +51,15 @@ const sidebars: SidebarsConfig = {
         'reference/skills',
       ],
     },
+    {
+      type: 'category',
+      label: 'Releases',
+      collapsed: true,
+      items: [
+        'releases/releases',
+        'releases/1.1.6',
+      ],
+    },
   ],
 };
 
