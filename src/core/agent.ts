@@ -1563,6 +1563,10 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
   }
 
   async shutdown(): Promise<void> {
+    if (this.supervisor) {
+      await this.supervisor.haltAll();
+    }
+    this.backgroundTasks.destroy();
     await this.sleep();
     logger.info('Mercury has shut down');
   }

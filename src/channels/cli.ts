@@ -426,8 +426,8 @@ export class CLIChannel extends BaseChannel {
           type: 'mode',
           message: 'Choose how Mercury handles risky actions this session.',
           options: [
-            { value: 'ask-me', label: 'Ask Me — confirm before file writes, shell commands, and scope changes' },
             { value: 'allow-all', label: 'Allow All — auto-approve everything (scopes, commands, loop continuation)' },
+            { value: 'ask-me', label: 'Ask Me — confirm before file writes, shell commands, and scope changes' },
           ],
           resolve: () => {},
         },
