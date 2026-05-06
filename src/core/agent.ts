@@ -258,6 +258,7 @@ export class Agent {
   private telegramStreaming: boolean;
   private currentMessage: ChannelMessage | null = null;
   private currentAbort: AbortController | null = null;
+  private autoBackgroundHandoff = false;
   private supervisor?: import('../core/supervisor.js').SubAgentSupervisor;
   readonly programmingMode: ProgrammingMode;
   private spotifyClient?: SpotifyClient;
@@ -331,6 +332,24 @@ export class Agent {
     logger.info({ from: msg.channelType, content: msg.content.slice(0, 50) }, 'Message enqueued');
 
     const trimmed = msg.content.trim();
+
+    if (
+      this.processing &&
+      !trimmed.startsWith('/') &&
+      msg.channelType !== 'internal' &&
+      this.supervisor &&
+      this.currentMessage &&
+      this.currentAbort &&
+      !this.currentAbort.signal.aborted &&
+      !this.autoBackgroundHandoff &&
+      this.currentMessage.channelType === msg.channelType &&
+      this.currentMessage.channelId === msg.channelId
+    ) {
+      void this.autoBackgroundCurrentTask(msg).catch((err) => {
+        logger.warn({ err }, 'Auto-background handoff failed');
+      });
+    }
+
     if (this.processing && trimmed.startsWith('/')) {
       this.handleFastPathCommand(msg).catch((err) => {
         logger.error({ err, content: trimmed.slice(0, 50) }, 'Fast-path command failed');
@@ -340,6 +359,37 @@ export class Agent {
 
     this.messageQueue.push(msg);
     this.processQueue();
+  }
+
+  private async autoBackgroundCurrentTask(interruptMsg: ChannelMessage): Promise<void> {
+    if (!this.currentMessage || !this.currentAbort || !this.supervisor) return;
+    if (this.currentAbort.signal.aborted || this.autoBackgroundHandoff) return;
+    this.autoBackgroundHandoff = true;
+    try {
+      const taskDescription = this.currentMessage.content.trim();
+      if (!taskDescription) return;
+
+      this.currentAbort.abort();
+
+      const agentId = await this.supervisor.spawn({
+        task: taskDescription,
+        sourceChannelId: this.currentMessage.channelId,
+        sourceChannelType: this.currentMessage.channelType as any,
+        workingDirectory: this.capabilities.getCwd(),
+      });
+      const bgId = this.backgroundTasks.spawnAgent(taskDescription, this.capabilities.getCwd(), agentId);
+      this.syncBgTasksToTui();
+
+      const channel = this.channels.getChannelForMessage(interruptMsg);
+      if (channel) {
+        await channel.send(
+          `📋 I moved the in-progress task to background (${bgId}) so I can respond now. Use /bg ${bgId} or /bg list for progress.`,
+          interruptMsg.channelId,
+        ).catch(() => {});
+      }
+    } finally {
+      this.autoBackgroundHandoff = false;
+    }
   }
 
   private async handleFastPathCommand(msg: ChannelMessage): Promise<void> {
