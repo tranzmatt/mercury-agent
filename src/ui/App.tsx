@@ -281,6 +281,15 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     }
 
     if (state.mode === 'workspace') {
+      if (key.ctrl && (ch === 'p' || ch === 'P')) {
+        onInput('/code plan');
+        return;
+      }
+      if (key.ctrl && (ch === 'x' || ch === 'X')) {
+        onInput('/code execute');
+        return;
+      }
+
       if (key.ctrl && (ch === 'e' || ch === 'E')) {
         setWorkspacePane('files');
         return;
@@ -323,6 +332,17 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     }
 
     if (state.mode === 'splash') return;
+
+    if ((state.mode === 'coding' || state.mode === 'workspace') && !state.permissionPrompt) {
+      if (key.ctrl && (ch === 'p' || ch === 'P')) {
+        onInput('/code plan');
+        return;
+      }
+      if (key.ctrl && (ch === 'x' || ch === 'X')) {
+        onInput('/code execute');
+        return;
+      }
+    }
 
     if (key.ctrl && (ch === 'v' || ch === 'V') && !state.permissionPrompt) {
       onInput('/view toggle');
@@ -604,6 +624,9 @@ function CodingBody({ state }: { state: TuiState }) {
         <ChatMessagesView messages={state.chatMessages} agentName={state.agentName} />
         {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
         {state.isThinking && <ThinkingIndicator agentName={state.agentName} steps={state.toolSteps} />}
+        <Box paddingX={1} marginTop={1}>
+          <Text dimColor>Mode shortcuts: Ctrl+P Plan · Ctrl+X Execute</Text>
+        </Box>
       </Box>
     </Box>
   );
@@ -716,7 +739,7 @@ function WorkspaceBody({ state, workspacePane, detailCursor, gitCursor }: { stat
         {state.isThinking && <ThinkingIndicator agentName={state.agentName} steps={state.toolSteps} />}
       </Box>
       <Box paddingX={1}>
-        <Text dimColor>Ctrl+E Explorer · Ctrl+G Git · Empty input = IDE navigation · Type text = chat mode</Text>
+        <Text dimColor>Ctrl+P Plan · Ctrl+X Execute · Ctrl+E Explorer · Ctrl+G Git · Empty input = IDE navigation</Text>
       </Box>
     </Box>
   );
@@ -985,7 +1008,7 @@ function InputBox({
         <Text dimColor>█</Text>
       </Box>
       <Box paddingX={1}>
-        <Text dimColor>{inWorkspace ? 'IDE chat active. Enter sends prompt; empty Enter navigates panel.' : 'Type a prompt, then Enter.'}</Text>
+        <Text dimColor>{inWorkspace ? 'IDE chat active. Ctrl+P Plan · Ctrl+X Execute · Enter sends prompt.' : inCoding ? 'Coding chat active. Ctrl+P Plan · Ctrl+X Execute.' : 'Type a prompt, then Enter.'}</Text>
       </Box>
     </Box>
   );
