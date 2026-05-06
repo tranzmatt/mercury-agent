@@ -246,6 +246,7 @@ class ToolCallLoopDetector {
 }
 
 const MAX_STEPS = 10;
+const MAX_RESPONSE_TOKENS = 1600;
 
 export class Agent {
   readonly lifecycle: Lifecycle;
@@ -772,6 +773,10 @@ export class Agent {
 
       const systemPrompt = this.buildSystemPrompt();
       const recentMemory = this.shortTerm.getRecent(msg.channelId, 10);
+      const cliChannel = msg.channelType === 'cli' ? this.channels.get('cli') : null;
+      const workspace = cliChannel && cliChannel instanceof CLIChannel ? cliChannel.getWorkspace() : null;
+      const isWorkspaceScoped = Boolean(workspace?.active);
+      const workspacePath = workspace?.rootPath || this.capabilities.getCwd();
 
       const messages: any[] = [];
 
@@ -816,7 +821,7 @@ export class Agent {
         messages.push({ role: 'assistant', content: 'Acknowledged. I will stop repeating and respond differently, or clearly state if the task cannot be completed.' });
       }
 
-      if (this.userMemory) {
+      if (!isWorkspaceScoped && this.userMemory) {
         const memoryContext = this.userMemory.retrieveRelevant(msg.content, { maxRecords: 5, maxChars: 900 });
         if (memoryContext.context) {
           messages.push({
@@ -825,7 +830,7 @@ export class Agent {
           });
           messages.push({ role: 'assistant', content: 'Noted. I\'ll keep this in mind.' });
         }
-      } else {
+      } else if (!isWorkspaceScoped) {
         const relevantFacts = this.longTerm.search(msg.content, 3);
         if (relevantFacts.length > 0) {
           messages.push({
@@ -836,7 +841,15 @@ export class Agent {
         }
       }
 
-      if (recentMemory.length > 0) {
+      if (isWorkspaceScoped) {
+        messages.push({
+          role: 'user',
+          content: `Workspace IDE mode is active for project: ${workspacePath}. Treat this as a coding-only session for this repository. Ignore unrelated personal/history context (music, casual chat, prior non-code tasks). If the user asks a non-coding question, redirect briefly to repository-focused help.`,
+        });
+        messages.push({ role: 'assistant', content: 'Understood. I will stay scoped to this repository and coding tasks only.' });
+      }
+
+      if (!isWorkspaceScoped && recentMemory.length > 0) {
         for (const m of recentMemory) {
           messages.push({
             role: m.role === 'user' ? 'user' : 'assistant',
@@ -890,6 +903,7 @@ export class Agent {
               system: systemPrompt,
               messages,
               tools: this.capabilities.getTools(),
+              maxOutputTokens: MAX_RESPONSE_TOKENS,
               stopWhen: stepCountIs(MAX_STEPS),
               abortSignal: loopAbortController.signal,
               ...(deepseekProviderOptions ? { providerOptions: deepseekProviderOptions } : {}),
@@ -1055,6 +1069,7 @@ export class Agent {
               system: systemPrompt,
               messages,
               tools: this.capabilities.getTools(),
+              maxOutputTokens: MAX_RESPONSE_TOKENS,
               stopWhen: stepCountIs(MAX_STEPS),
               abortSignal: loopAbortController.signal,
               ...(deepseekProviderOptions ? { providerOptions: deepseekProviderOptions } : {}),
@@ -2506,13 +2521,12 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
     const channel = this.channels.get(channelType as any);
     if (!channel || channelType !== 'cli' || !(channel instanceof CLIChannel)) return false;
 
-    const lower = content.toLowerCase();
-    if (!lower.includes('workspace')) return false;
-    if (!(lower.includes('open') || lower.includes('use') || lower.includes('enter'))) return false;
+    const trimmed = content.trim();
+    const commandMatch = trimmed.match(/^(?:open|use|enter)\s+workspace(?:\s+(.+))?$/i);
+    if (!commandMatch) return false;
 
-    const pathMatch = content.match(/(?:open|use|workspace)\s+(?:at\s+|in\s+)?([^,.;]+)$/i);
-    const targetRaw = (pathMatch?.[1] || '').trim();
-    const target = targetRaw && !targetRaw.startsWith('workspace') ? targetRaw : this.capabilities.getCwd();
+    const targetRaw = (commandMatch[1] || '').trim();
+    const target = targetRaw || this.capabilities.getCwd();
     const opened = channel.openWorkspace(target);
     if (!opened.ok) {
       await channel.send(opened.message, channelId);

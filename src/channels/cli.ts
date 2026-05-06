@@ -65,6 +65,7 @@ export class CLIChannel extends BaseChannel {
   private stepStartTime = 0;
   private state: TuiState = { ...defaultState };
   private spotifyClient: any = null;
+  private rawModeWatchdog: NodeJS.Timeout | null = null;
 
   constructor(agentName: string = 'Mercury') {
     super();
@@ -83,9 +84,50 @@ export class CLIChannel extends BaseChannel {
   }
 
   async stop(): Promise<void> {
+    this.stopRawModeWatchdog();
     this.inkInstance?.unmount();
     this.inkInstance = null;
+    this.releaseRawMode();
     this.ready = false;
+  }
+
+  private ensureRawMode(): void {
+    if (!process.stdin.isTTY) return;
+    const stdin = process.stdin as NodeJS.ReadStream;
+    if (typeof stdin.setRawMode !== 'function') return;
+    try {
+      stdin.setRawMode(true);
+      stdin.resume();
+    } catch {
+      // Ignore transient raw mode failures.
+    }
+  }
+
+  private releaseRawMode(): void {
+    if (!process.stdin.isTTY) return;
+    const stdin = process.stdin as NodeJS.ReadStream;
+    if (typeof stdin.setRawMode !== 'function') return;
+    try {
+      stdin.setRawMode(false);
+    } catch {
+      // Ignore teardown failures.
+    }
+  }
+
+  private startRawModeWatchdog(): void {
+    this.stopRawModeWatchdog();
+    this.ensureRawMode();
+    this.rawModeWatchdog = setInterval(() => {
+      if (!this.inkInstance) return;
+      this.ensureRawMode();
+    }, 250);
+  }
+
+  private stopRawModeWatchdog(): void {
+    if (this.rawModeWatchdog) {
+      clearInterval(this.rawModeWatchdog);
+      this.rawModeWatchdog = null;
+    }
   }
 
   private update(partial: Partial<TuiState>): void {
@@ -107,8 +149,10 @@ export class CLIChannel extends BaseChannel {
           this.update({ permissionPrompt: null });
         },
         onExit: () => {
+          this.stopRawModeWatchdog();
           this.inkInstance?.unmount();
           this.inkInstance = null;
+          this.releaseRawMode();
           this.exitHandler?.();
         },
         spotifyClient: this.spotifyClient,
@@ -197,14 +241,18 @@ export class CLIChannel extends BaseChannel {
           this.update({ permissionPrompt: null });
         },
         onExit: () => {
+          this.stopRawModeWatchdog();
           this.inkInstance?.unmount();
           this.inkInstance = null;
+          this.releaseRawMode();
           this.exitHandler?.();
         },
         spotifyClient: this.spotifyClient,
       }),
       { exitOnCtrlC: false, patchConsole: false },
     );
+
+    this.startRawModeWatchdog();
   }
 
   async send(content: string, _targetId?: string, _elapsedMs?: number): Promise<void> {
@@ -341,6 +389,7 @@ export class CLIChannel extends BaseChannel {
       if (this.menuDepth === 0) {
         this.menuAbortController = null;
       }
+      this.ensureRawMode();
     }
   }
 
