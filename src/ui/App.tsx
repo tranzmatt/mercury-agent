@@ -53,6 +53,21 @@ const STATUS_ICONS: Record<string, { icon: string; color: string }> = {
   halted: { icon: '⛔', color: 'red' },
 };
 
+function canRenderInlineAlbumArt(): boolean {
+  if (process.env.MERCURY_SPOTIFY_ART !== '1') return false;
+  if (process.env.CI === 'true') return false;
+  if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return false;
+  return process.env.TERM_PROGRAM === 'iTerm.app';
+}
+
+async function buildItermInlineImage(url: string): Promise<string> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Album art fetch failed: ${response.status}`);
+  const contentType = response.headers.get('content-type') || 'image/jpeg';
+  const data = Buffer.from(await response.arrayBuffer()).toString('base64');
+  return `\u001b]1337;File=inline=1;width=24;height=12;preserveAspectRatio=1;type=${contentType}:${data}\u0007`;
+}
+
 export interface TuiAppProps {
   state: TuiState;
   onInput: (text: string) => void;
@@ -73,6 +88,9 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   const [spotifyNow, setSpotifyNow] = React.useState('');
   const [spotifyStatus, setSpotifyStatus] = React.useState('');
   const [spotifyVolume, setSpotifyVolume] = React.useState<number | null>(null);
+  const [spotifyArtUrl, setSpotifyArtUrl] = React.useState<string | null>(null);
+  const [spotifyArtAnsi, setSpotifyArtAnsi] = React.useState<string>('');
+  const albumArtCache = React.useRef<Map<string, string>>(new Map());
   const [inputHistory, setInputHistory] = React.useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = React.useState<number>(-1);
   const [historyDraft, setHistoryDraft] = React.useState<string>('');
@@ -155,9 +173,11 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
           const data = await spotifyClient.getCurrentlyPlaying();
           setSpotifyNow(formatNowPlaying(data));
           setSpotifyVolume(typeof data?.device?.volume_percent === 'number' ? data.device.volume_percent : null);
+          setSpotifyArtUrl(data?.item?.album?.images?.[0]?.url || null);
         } catch {
           setSpotifyNow('Nothing playing');
           setSpotifyVolume(null);
+          setSpotifyArtUrl(null);
         }
       };
       refresh();
@@ -165,6 +185,40 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       return () => clearInterval(interval);
     }
   }, [state.mode, spotifyClient]);
+
+  React.useEffect(() => {
+    if (state.mode !== 'spotify') return;
+    if (!spotifyArtUrl) {
+      setSpotifyArtAnsi('');
+      return;
+    }
+    if (!canRenderInlineAlbumArt()) {
+      setSpotifyArtAnsi('');
+      return;
+    }
+
+    const cached = albumArtCache.current.get(spotifyArtUrl);
+    if (cached) {
+      setSpotifyArtAnsi(cached);
+      return;
+    }
+
+    let cancelled = false;
+    buildItermInlineImage(spotifyArtUrl)
+      .then((ansi) => {
+        if (cancelled) return;
+        albumArtCache.current.set(spotifyArtUrl, ansi);
+        setSpotifyArtAnsi(ansi);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSpotifyArtAnsi('');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state.mode, spotifyArtUrl]);
 
   const runSpotifyAction = React.useCallback(async (action: string) => {
     if (!spotifyClient || action === 'exit') return;
@@ -188,6 +242,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       const data = await spotifyClient.getCurrentlyPlaying();
       setSpotifyNow(formatNowPlaying(data));
       setSpotifyVolume(typeof data?.device?.volume_percent === 'number' ? data.device.volume_percent : null);
+      setSpotifyArtUrl(data?.item?.album?.images?.[0]?.url || null);
     } catch (err: any) {
       setSpotifyStatus(err?.message || 'Spotify action failed');
     }
@@ -525,7 +580,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     <Box flexDirection="column" flexGrow={1}>
       <StatusBarView state={state} />
       {state.backgroundTasks.length > 0 && <BackgroundBarView tasks={state.backgroundTasks} />}
-      {state.mode === 'spotify' ? <SpotifyBody activeIdx={spotifyIdx} nowPlaying={spotifyNow} status={spotifyStatus} volume={spotifyVolume} /> : null}
+      {state.mode === 'spotify' ? <SpotifyBody activeIdx={spotifyIdx} nowPlaying={spotifyNow} status={spotifyStatus} volume={spotifyVolume} albumArtAnsi={spotifyArtAnsi} /> : null}
       {state.mode === 'menu' ? <MenuBody menuIdx={menuIdx} /> : null}
       {state.mode === 'coding' ? <CodingBody state={state} /> : null}
       {state.mode === 'workspace' ? <WorkspaceBody state={state} workspacePane={workspacePane} detailCursor={detailCursor} gitCursor={gitCursor} /> : null}
@@ -823,7 +878,7 @@ function MenuBody({ menuIdx }: { menuIdx: number }) {
   );
 }
 
-function SpotifyBody({ activeIdx, nowPlaying, status, volume }: { activeIdx: number; nowPlaying: string; status: string; volume: number | null }) {
+function SpotifyBody({ activeIdx, nowPlaying, status, volume, albumArtAnsi }: { activeIdx: number; nowPlaying: string; status: string; volume: number | null; albumArtAnsi: string }) {
   const volumeBar = volume == null
     ? '[unknown]'
     : `[${'█'.repeat(Math.max(0, Math.min(10, Math.round(volume / 10))))}${'░'.repeat(Math.max(0, 10 - Math.round(volume / 10)))}] ${volume}%`;
@@ -840,6 +895,11 @@ function SpotifyBody({ activeIdx, nowPlaying, status, volume }: { activeIdx: num
         <Box>
           <Text color="green">│</Text><Text> </Text><Text color="yellow">Volume:</Text><Text> </Text><Text>{volumeBar}</Text>
         </Box>
+        {albumArtAnsi ? (
+          <Box>
+            <Text color="green">│</Text><Text> </Text><Text>{albumArtAnsi}</Text>
+          </Box>
+        ) : null}
         {status ? (
           <Box>
             <Text color="green">│</Text><Text> </Text><Text color="cyan">Last action:</Text><Text> </Text><Text>{status}</Text>
@@ -916,7 +976,7 @@ function ToolStepsView({ steps, viewMode }: { steps: ToolStep[]; viewMode: 'bala
           {viewMode === 'detailed' && step.result && <Text dimColor> · {step.result}</Text>}
         </Box>
       ))}
-      <Text dimColor>Press V to toggle Minimal/Detailed</Text>
+      <Text dimColor>Ctrl+V toggles Minimal/Detailed (or use /view)</Text>
     </Box>
   );
 }

@@ -37,7 +37,8 @@ export const PLAYER_CONTROLS = [
   { value: 'now', label: '🎵 Now Playing' },
   { value: 'devices', label: '📱 Devices' },
   { value: 'search', label: '🔍 Search & Play' },
-  { value: 'volume', label: '🔊 Set Volume' },
+  { value: 'volume_up', label: '🔊 Volume +10%' },
+  { value: 'volume_down', label: '🔉 Volume -10%' },
   { value: 'queue', label: '📋 Add to Queue' },
   { value: 'like', label: '❤️  Like Current Track' },
   { value: 'exit', label: '✕  Exit Player' },
@@ -81,10 +82,16 @@ export async function handlePlayerAction(
       if (!data?.item?.id) return 'Nothing playing to like.';
       return await spotify.likeTrack(data.item.id);
     }
-    case 'volume': {
+    case 'volume_up': {
       const state = await spotify.getPlaybackState();
       const current = typeof state?.device?.volume_percent === 'number' ? state.device.volume_percent : 50;
       const next = Math.min(100, current + 10);
+      return await spotify.setVolume(next);
+    }
+    case 'volume_down': {
+      const state = await spotify.getPlaybackState();
+      const current = typeof state?.device?.volume_percent === 'number' ? state.device.volume_percent : 50;
+      const next = Math.max(0, current - 10);
       return await spotify.setVolume(next);
     }
     case 'queue':
