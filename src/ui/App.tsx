@@ -71,6 +71,8 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   const [skillsLoaded, setSkillsLoaded] = React.useState(0);
   const [showStartupDetails, setShowStartupDetails] = React.useState(false);
   const [spotifyNow, setSpotifyNow] = React.useState('');
+  const [spotifyStatus, setSpotifyStatus] = React.useState('');
+  const [spotifyVolume, setSpotifyVolume] = React.useState<number | null>(null);
   const [inputHistory, setInputHistory] = React.useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = React.useState<number>(-1);
   const [historyDraft, setHistoryDraft] = React.useState<string>('');
@@ -152,8 +154,10 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
         try {
           const data = await spotifyClient.getCurrentlyPlaying();
           setSpotifyNow(formatNowPlaying(data));
+          setSpotifyVolume(typeof data?.device?.volume_percent === 'number' ? data.device.volume_percent : null);
         } catch {
           setSpotifyNow('Nothing playing');
+          setSpotifyVolume(null);
         }
       };
       refresh();
@@ -161,6 +165,33 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       return () => clearInterval(interval);
     }
   }, [state.mode, spotifyClient]);
+
+  const runSpotifyAction = React.useCallback(async (action: string) => {
+    if (!spotifyClient || action === 'exit') return;
+    try {
+      if (action === 'volume_up') {
+        const current = typeof spotifyVolume === 'number' ? spotifyVolume : 50;
+        const next = Math.min(100, current + 10);
+        const result = await spotifyClient.setVolume(next);
+        setSpotifyStatus(result);
+      } else if (action === 'volume_down') {
+        const current = typeof spotifyVolume === 'number' ? spotifyVolume : 50;
+        const next = Math.max(0, current - 10);
+        const result = await spotifyClient.setVolume(next);
+        setSpotifyStatus(result);
+      } else {
+        const { handlePlayerAction } = await import('../spotify/ui.js');
+        const result = await handlePlayerAction(action, spotifyClient);
+        setSpotifyStatus(result);
+      }
+
+      const data = await spotifyClient.getCurrentlyPlaying();
+      setSpotifyNow(formatNowPlaying(data));
+      setSpotifyVolume(typeof data?.device?.volume_percent === 'number' ? data.device.volume_percent : null);
+    } catch (err: any) {
+      setSpotifyStatus(err?.message || 'Spotify action failed');
+    }
+  }, [spotifyClient, spotifyVolume]);
 
   React.useEffect(() => {
     if (state.permissionPrompt) {
@@ -248,19 +279,36 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     }
 
     if (state.mode === 'spotify') {
+      if (ch === 'n' || ch === 'N') {
+        runSpotifyAction('next');
+        return;
+      }
+      if (ch === 'p' || ch === 'P') {
+        runSpotifyAction('prev');
+        return;
+      }
+      if (ch === ' ') {
+        runSpotifyAction('play');
+        return;
+      }
+      if (ch === '+' || ch === '=') {
+        runSpotifyAction('volume_up');
+        return;
+      }
+      if (ch === '-') {
+        runSpotifyAction('volume_down');
+        return;
+      }
+      if (ch === 'z' || ch === 'Z') {
+        runSpotifyAction('now');
+        return;
+      }
+
       if (key.upArrow) setSpotifyIdx((i) => Math.max(0, i - 1));
       else if (key.downArrow) setSpotifyIdx((i) => Math.min(PLAYER_CONTROLS.length - 1, i + 1));
       else if (key.return) {
         const action = PLAYER_CONTROLS[spotifyIdx];
-        if (action && spotifyClient && action.value !== 'exit') {
-          import('../spotify/ui.js').then(({ handlePlayerAction }) => {
-            handlePlayerAction(action.value, spotifyClient).then(() => {
-              spotifyClient.getCurrentlyPlaying().then((data: any) => {
-                setSpotifyNow(formatNowPlaying(data));
-              }).catch(() => {});
-            }).catch(() => {});
-          });
-        }
+        if (action && action.value !== 'exit') runSpotifyAction(action.value);
         if (action?.value === 'exit') onInput('/chat');
       } else if (key.escape) onInput('/chat');
       return;
@@ -477,7 +525,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     <Box flexDirection="column" flexGrow={1}>
       <StatusBarView state={state} />
       {state.backgroundTasks.length > 0 && <BackgroundBarView tasks={state.backgroundTasks} />}
-      {state.mode === 'spotify' ? <SpotifyBody activeIdx={spotifyIdx} nowPlaying={spotifyNow} /> : null}
+      {state.mode === 'spotify' ? <SpotifyBody activeIdx={spotifyIdx} nowPlaying={spotifyNow} status={spotifyStatus} volume={spotifyVolume} /> : null}
       {state.mode === 'menu' ? <MenuBody menuIdx={menuIdx} /> : null}
       {state.mode === 'coding' ? <CodingBody state={state} /> : null}
       {state.mode === 'workspace' ? <WorkspaceBody state={state} workspacePane={workspacePane} detailCursor={detailCursor} gitCursor={gitCursor} /> : null}
@@ -775,15 +823,29 @@ function MenuBody({ menuIdx }: { menuIdx: number }) {
   );
 }
 
-function SpotifyBody({ activeIdx, nowPlaying }: { activeIdx: number; nowPlaying: string }) {
+function SpotifyBody({ activeIdx, nowPlaying, status, volume }: { activeIdx: number; nowPlaying: string; status: string; volume: number | null }) {
+  const volumeBar = volume == null
+    ? '[unknown]'
+    : `[${'█'.repeat(Math.max(0, Math.min(10, Math.round(volume / 10))))}${'░'.repeat(Math.max(0, 10 - Math.round(volume / 10)))}] ${volume}%`;
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1}>
-      <Box marginBottom={1} paddingX={1}>
-        <Text color="green">{'─'.repeat(30)}</Text>
-        <Box flexDirection="column">
-          <Text bold color="green">Now Playing</Text>
-          <Text>{nowPlaying || 'Nothing playing'}</Text>
+      <Box paddingX={1} marginBottom={1} flexDirection="column">
+        <Text color="green">╭────────────────── Spotify Deck ──────────────────╮</Text>
+        <Text color="green">│</Text><Text> </Text><Text bold color="green">Now Playing</Text>
+        {(nowPlaying || 'Nothing playing').split('\n').map((line, idx) => (
+          <Box key={`np-${idx}`}>
+            <Text color="green">│</Text><Text> </Text><Text>{line}</Text>
+          </Box>
+        ))}
+        <Box>
+          <Text color="green">│</Text><Text> </Text><Text color="yellow">Volume:</Text><Text> </Text><Text>{volumeBar}</Text>
         </Box>
+        {status ? (
+          <Box>
+            <Text color="green">│</Text><Text> </Text><Text color="cyan">Last action:</Text><Text> </Text><Text>{status}</Text>
+          </Box>
+        ) : null}
+        <Text color="green">╰───────────────────────────────────────────────────╯</Text>
       </Box>
       <Box flexDirection="column">
         <Text bold color="cyan">Controls</Text>
@@ -794,7 +856,9 @@ function SpotifyBody({ activeIdx, nowPlaying }: { activeIdx: number; nowPlaying:
           </Box>
         ))}
       </Box>
-      <Box marginTop={1}><Text dimColor>↑↓ navigate · Enter select · Esc exit player</Text></Box>
+      <Box marginTop={1}>
+        <Text dimColor>↑↓ navigate · Enter select · N next · P previous · +/- volume · Z now playing · Esc exit</Text>
+      </Box>
     </Box>
   );
 }

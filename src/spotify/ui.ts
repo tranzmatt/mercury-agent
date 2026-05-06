@@ -81,6 +81,16 @@ export async function handlePlayerAction(
       if (!data?.item?.id) return 'Nothing playing to like.';
       return await spotify.likeTrack(data.item.id);
     }
+    case 'volume': {
+      const state = await spotify.getPlaybackState();
+      const current = typeof state?.device?.volume_percent === 'number' ? state.device.volume_percent : 50;
+      const next = Math.min(100, current + 10);
+      return await spotify.setVolume(next);
+    }
+    case 'queue':
+      return 'Use `/spotify queue <track name>` to choose what to add.';
+    case 'search':
+      return 'Use `/spotify search <track name>` to search and play.';
     default:
       return 'Unknown action';
   }
