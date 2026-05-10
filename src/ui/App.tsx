@@ -1,7 +1,7 @@
 import React from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, Text, Spacer, useApp, useInput, useStdout } from 'ink';
 import type { TuiState } from '../channels/cli.js';
-import type { AppMode, ChatMessage, ToolStep, SubAgentInfo, PermissionPromptState, SidebarSection, BackgroundTaskInfo } from './types.js';
+import type { AppMode, ChatMessage, ToolStep, SubAgentInfo, PermissionPromptState, SidebarSection, BackgroundTaskInfo, WorkspaceState } from './types.js';
 import type { PermissionMode } from '../channels/base.js';
 import type { ProgrammingModeState } from '../core/programming-mode.js';
 import { renderMarkdown } from '../utils/markdown.js';
@@ -79,7 +79,11 @@ export interface TuiAppProps {
 export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyClient }: TuiAppProps) {
   const { exit } = useApp();
   const [input, setInput] = React.useState('');
-  const [permIdx, setPermIdx] = React.useState(0);
+  const [cursorPos, setCursorPos] = React.useState(0);
+  const setInputAndCursor = (text: string, pos?: number) => {
+    setInput(text);
+    setCursorPos(pos ?? text.length);
+  };  const [permIdx, setPermIdx] = React.useState(0);
   const permIdxRef = React.useRef(0);
   const [menuIdx, setMenuIdx] = React.useState(0);
   const [spotifyIdx, setSpotifyIdx] = React.useState(6);
@@ -102,6 +106,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
   const slashCommands = React.useMemo(() => [
     '/help',
     '/status',
+    '/progress',
     '/menu',
     '/chat',
     '/code',
@@ -109,7 +114,9 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     '/code execute',
     '/code build',
     '/code workspace',
+    '/code agent ',
     '/code off',
+    '/code toggle',
     '/spotify',
     '/budget',
     '/permissions',
@@ -117,11 +124,21 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     '/models',
     '/models use ',
     '/agents',
+    '/agents stop ',
+    '/agents pause ',
+    '/agents resume ',
     '/bg',
     '/bg current',
     '/bg list',
     '/bg cancel ',
     '/bg clear',
+    '/bg killall',
+    '/stop',
+    '/halt',
+    '/reset',
+    '/tools',
+    '/skills',
+    '/stream',
     '/view',
     '/view balanced',
     '/view detailed',
@@ -139,7 +156,13 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
     const q = input.toLowerCase();
     return slashCommands.filter((cmd) => cmd.startsWith(q)).slice(0, 5);
   }, [input, slashCommands]);
-  
+
+  const [slashSelIdx, setSlashSelIdx] = React.useState(0);
+
+  // Reset selection index when suggestions change
+  React.useEffect(() => {
+    setSlashSelIdx(0);
+  }, [slashSuggestions.length, input]);
 
   React.useEffect(() => {
     if (state.mode !== 'splash') return;
@@ -392,6 +415,14 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
 
     if (isEnter) {
       const trimmed = input.trim();
+
+      // If autocomplete popup is showing and input doesn't exactly match the selected suggestion,
+      // fill the suggestion into the input instead of submitting
+      if (slashSuggestions.length > 0 && trimmed !== slashSuggestions[slashSelIdx]) {
+        setInputAndCursor(slashSuggestions[slashSelIdx]);
+        return;
+      }
+
       if (trimmed) {
         onInput(trimmed);
         setInputHistory((prev) => {
@@ -400,14 +431,23 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
         });
         setHistoryIndex(-1);
         setHistoryDraft('');
-        setInput('');
+        setInputAndCursor('');
         return;
       }
     }
 
     if (state.mode === 'workspace') {
+      const focusArea = state.workspace?.focusArea || 'explorer';
+      const rightPanel = state.workspace?.rightPanel || 'chat';
+
+      // Global workspace shortcuts (always active)
       if (key.escape || (key.ctrl && (ch === 'q' || ch === 'Q'))) {
-        onInput('/ws exit');
+        // Esc in non-explorer panel returns to explorer; Esc in explorer exits workspace
+        if (focusArea !== 'explorer') {
+          onInput('/ws focus explorer');
+        } else {
+          onInput('/ws exit');
+        }
         return;
       }
 
@@ -420,44 +460,69 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
         return;
       }
 
+      // Panel focus shortcuts
       if (key.ctrl && (ch === 'e' || ch === 'E')) {
-        setWorkspacePane('files');
+        onInput('/ws focus explorer');
         return;
       }
       if (key.ctrl && (ch === 'g' || ch === 'G')) {
-        setWorkspacePane('git');
+        onInput('/ws focus git');
+        return;
+      }
+      if (key.ctrl && (ch === 'j' || ch === 'J')) {
+        onInput('/ws toggle-chat');
+        return;
+      }
+
+      // Tab cycles focus: explorer → code → right panel (chat or git)
+      if (key.tab) {
+        const showRight = (process.stdout.columns || 80) >= 100;
+        const rightFocus = rightPanel === 'chat' ? 'chat' : 'git';
+        const cycle = showRight ? ['explorer', 'code', rightFocus] : ['explorer', 'code'];
+        const nextIdx = (cycle.indexOf(focusArea) + 1) % cycle.length;
+        onInput(`/ws focus ${cycle[nextIdx]}`);
         return;
       }
 
       const navMode = input.trim().length === 0;
 
-      if (navMode && key.upArrow) {
-        if (workspacePane === 'files') onInput('/ws up');
-        else if (workspacePane === 'details') setDetailCursor((i) => Math.max(0, i - 1));
-        else setGitCursor((i) => Math.max(0, i - 1));
-        return;
-      }
-      if (navMode && key.downArrow) {
-        if (workspacePane === 'files') onInput('/ws down');
-        else if (workspacePane === 'details') setDetailCursor((i) => Math.min(3, i + 1));
-        else setGitCursor((i) => Math.min((state.workspace?.gitFiles.length || 1) - 1, i + 1));
-        return;
-      }
-      if (navMode && key.leftArrow) {
-        if (workspacePane === 'files') onInput('/ws collapse');
-        return;
-      }
-      if (navMode && key.rightArrow) {
-        if (workspacePane === 'files') onInput('/ws expand');
-        return;
-      }
-      if (navMode && isEnter) {
-        if (workspacePane === 'files') onInput('/ws open-selected');
-        else if (workspacePane === 'git') {
-          const picked = state.workspace?.gitFiles[gitCursor];
-          if (picked) onInput(`/ws stage ${picked.path}`);
+      // Focus-aware navigation
+      if (navMode) {
+        if (focusArea === 'explorer') {
+          if (key.upArrow) { onInput('/ws up'); return; }
+          if (key.downArrow) { onInput('/ws down'); return; }
+          if (key.leftArrow) { onInput('/ws collapse'); return; }
+          if (key.rightArrow) { onInput('/ws expand'); return; }
+          if (isEnter) { onInput('/ws open-selected'); return; }
         }
-        return;
+
+        if (focusArea === 'code') {
+          if (key.upArrow) { onInput('/ws scroll -1'); return; }
+          if (key.downArrow) { onInput('/ws scroll 1'); return; }
+          if (key.pageUp) { onInput('/ws scroll -15'); return; }
+          if (key.pageDown) { onInput('/ws scroll 15'); return; }
+          if (key.ctrl && (ch === 'u' || ch === 'U')) { onInput('/ws scroll -10'); return; }
+          if (key.ctrl && (ch === 'd' || ch === 'D')) { onInput('/ws scroll 10'); return; }
+        }
+
+        if (focusArea === 'git') {
+          if (key.upArrow) { setGitCursor((i) => Math.max(0, i - 1)); return; }
+          if (key.downArrow) { setGitCursor((i) => Math.min((state.workspace?.gitFiles.length || 1) - 1, i + 1)); return; }
+          if (isEnter) {
+            const picked = state.workspace?.gitFiles[gitCursor];
+            if (picked) onInput(`/ws stage ${picked.path}`);
+            return;
+          }
+        }
+
+        if (focusArea === 'chat') {
+          if (key.upArrow) { onInput('/ws chat-scroll -1'); return; }
+          if (key.downArrow) { onInput('/ws chat-scroll 1'); return; }
+          if (key.pageUp) { onInput('/ws chat-scroll -10'); return; }
+          if (key.pageDown) { onInput('/ws chat-scroll 10'); return; }
+          if (key.ctrl && (ch === 'u' || ch === 'U')) { onInput('/ws chat-scroll -8'); return; }
+          if (key.ctrl && (ch === 'd' || ch === 'D')) { onInput('/ws chat-scroll 8'); return; }
+        }
       }
     }
 
@@ -474,13 +539,20 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       }
     }
 
-    if (key.ctrl && (ch === 'v' || ch === 'V') && !state.permissionPrompt) {
+    if (key.ctrl && (ch === 't' || ch === 'T') && !state.permissionPrompt) {
       onInput('/view toggle');
       return;
     }
 
     if (key.ctrl && (ch === 'b' || ch === 'B') && !state.permissionPrompt) {
       onInput(state.isThinking ? '/bg current' : '/bg list');
+      return;
+    }
+
+    // Ctrl+N → insert newline (multi-line input)
+    if (key.ctrl && (ch === 'n' || ch === 'N' || ch === '\x0e')) {
+      setInput((prev) => prev.slice(0, cursorPos) + '\n' + prev.slice(cursorPos));
+      setCursorPos((p) => p + 1);
       return;
     }
 
@@ -495,25 +567,46 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
 
     if (key.tab) {
       if (input.startsWith('/') && slashSuggestions.length > 0) {
-        const exactIdx = slashSuggestions.findIndex((cmd) => cmd === input);
-        const nextIdx = exactIdx >= 0 ? (exactIdx + 1) % slashSuggestions.length : 0;
-        setInput(slashSuggestions[nextIdx]);
+        setInputAndCursor(slashSuggestions[slashSelIdx]);
       }
       return;
     }
 
+    // Left/right arrow: move cursor within input
+    if (key.leftArrow) {
+      setCursorPos((p) => Math.max(0, p - 1));
+      return;
+    }
+    if (key.rightArrow) {
+      setCursorPos((p) => Math.min(input.length, p + 1));
+      return;
+    }
+
+    // Up/down arrow: navigate slash suggestions when popup is visible
+    if (slashSuggestions.length > 0) {
+      if (key.upArrow) {
+        setSlashSelIdx((i) => (i > 0 ? i - 1 : slashSuggestions.length - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setSlashSelIdx((i) => (i < slashSuggestions.length - 1 ? i + 1 : 0));
+        return;
+      }
+    }
+
+    // Up arrow: navigate input history
     if (key.upArrow) {
       if (inputHistory.length === 0) return;
       if (historyIndex === -1) {
         setHistoryDraft(input);
         const next = inputHistory.length - 1;
         setHistoryIndex(next);
-        setInput(inputHistory[next] ?? '');
+        setInputAndCursor(inputHistory[next] ?? '');
         return;
       }
       const next = Math.max(0, historyIndex - 1);
       setHistoryIndex(next);
-      setInput(inputHistory[next] ?? '');
+      setInputAndCursor(inputHistory[next] ?? '');
       return;
     }
 
@@ -522,23 +615,31 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       const next = historyIndex + 1;
       if (next >= inputHistory.length) {
         setHistoryIndex(-1);
-        setInput(historyDraft);
+        setInputAndCursor(historyDraft);
         return;
       }
       setHistoryIndex(next);
-      setInput(inputHistory[next] ?? '');
+      setInputAndCursor(inputHistory[next] ?? '');
       return;
     }
 
     if (key.backspace || key.delete) {
-      setInput((prev) => prev.slice(0, -1));
+      if (cursorPos > 0) {
+        setInput((prev) => prev.slice(0, cursorPos - 1) + prev.slice(cursorPos));
+        setCursorPos((p) => p - 1);
+      }
       return;
     }
 
     if (key.ctrl || key.meta) return;
 
-    if (ch && ch.length === 1 && !key.escape) {
-      setInput((prev) => prev + ch);
+    if (ch && ch.length > 0 && !key.escape) {
+      // Strip control chars but keep printable content (handles paste)
+      const clean = ch.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+      if (clean) {
+        setInput((prev) => prev.slice(0, cursorPos) + clean + prev.slice(cursorPos));
+        setCursorPos((p) => p + clean.length);
+      }
     }
   });
 
@@ -604,8 +705,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       {state.mode === 'spotify' ? <SpotifyBody activeIdx={spotifyIdx} nowPlaying={spotifyNow} status={spotifyStatus} volume={spotifyVolume} albumArtAnsi={spotifyArtAnsi} /> : null}
       {state.mode === 'menu' ? <MenuBody menuIdx={menuIdx} /> : null}
       {state.mode === 'coding' ? <CodingBody state={state} /> : null}
-      {state.mode === 'workspace' ? <WorkspaceBody state={state} workspacePane={workspacePane} detailCursor={detailCursor} gitCursor={gitCursor} /> : null}
-      {state.mode === 'chat' ? (
+      {(state.mode === 'workspace' || state.mode === 'chat') ? (
         <ChatBody state={state} />
       ) : null}
       {state.permissionPrompt && (
@@ -614,6 +714,7 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       {showInput && (
         <InputBox
           input={input}
+          cursorPos={cursorPos}
           mode={state.mode}
           programmingMode={state.programmingMode}
           projectContext={state.projectContext}
@@ -621,9 +722,9 @@ export function TuiApp({ state, onInput, onPermissionResolve, onExit, spotifyCli
       )}
       {showInput && slashSuggestions.length > 0 && (
         <Box flexDirection="column" paddingX={1}>
-          <Text dimColor>Suggestions (Tab to complete):</Text>
+          <Text dimColor>Suggestions (↑↓ navigate · Tab/Enter to select):</Text>
           {slashSuggestions.map((cmd, idx) => (
-            <Text key={cmd} color={idx === 0 ? 'cyan' : 'gray'}>{idx === 0 ? '›' : ' '} {cmd}</Text>
+            <Text key={cmd} color={idx === slashSelIdx ? 'cyan' : 'gray'}>{idx === slashSelIdx ? '›' : ' '} {cmd}</Text>
           ))}
         </Box>
       )}
@@ -675,13 +776,25 @@ function StatusBarView({ state }: { state: TuiState }) {
   const providerBadge = state.provider ? `⚡ ${state.provider.name} · ${state.provider.model}` : '⚡ No provider';
   const viewLabel = state.viewMode === 'balanced' ? 'minimal' : 'detailed';
 
+  // Dynamic subtitle based on thinking state
+  const runningStep = [...state.toolSteps].reverse().find((s) => s.status === 'running');
+  const doneSteps = state.toolSteps.filter((s) => s.status === 'done').length;
+  let subtitle: React.ReactNode;
+  if (state.isThinking) {
+    const activity = runningStep ? runningStep.label : 'Processing';
+    const stepCount = doneSteps > 0 ? `step ${doneSteps + 1}` : 'step 1';
+    subtitle = <Text color="green">● {stepCount} · {activity}</Text>;
+  } else {
+    subtitle = <Text color={BRAND.subtitle}> · Your soul-driven AI agent</Text>;
+  }
+
   return (
     <Box flexDirection="column">
       <Box paddingX={1}>
         <Text color={BRAND.logo}>☿</Text>
         <Text> </Text>
         <Text bold color={BRAND.title}>MERCURY</Text>
-        <Text color={BRAND.subtitle}> · Your soul-driven AI agent</Text>
+        {subtitle}
       </Box>
       <Box paddingX={1} paddingBottom={0}>
         <Box flexGrow={1}>
@@ -713,7 +826,7 @@ function ChatBody({ state }: { state: TuiState }) {
       {state.sidebarSections.length > 0 && <SidebarView sections={state.sidebarSections} />}
       <Box flexDirection="column" flexGrow={1}>
         <ChatMessagesView messages={state.chatMessages} agentName={state.agentName} />
-        {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
+        {state.toolSteps.length > 0 && !state.isThinking && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
         {state.isThinking && <ThinkingIndicator agentName={state.agentName} steps={state.toolSteps} mode={state.mode} />}
         {state.subAgents.length > 0 && <AgentPanelView agents={state.subAgents} />}
       </Box>
@@ -752,7 +865,7 @@ function CodingBody({ state }: { state: TuiState }) {
       </Box>
       <Box flexDirection="column" flexGrow={1}>
         <ChatMessagesView messages={state.chatMessages} agentName={state.agentName} />
-        {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
+        {state.toolSteps.length > 0 && !state.isThinking && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
         {state.isThinking && <ThinkingIndicator agentName={state.agentName} steps={state.toolSteps} mode={state.mode} />}
         <Box paddingX={1} marginTop={1}>
           <Text dimColor>Mode shortcuts: Ctrl+P Plan · Ctrl+X Execute</Text>
@@ -762,8 +875,355 @@ function CodingBody({ state }: { state: TuiState }) {
   );
 }
 
+// ─── Workspace IDE ──────────────────────────────────────────────────────────
+
+function useTerminalSize(): { rows: number; cols: number } {
+  const { stdout } = useStdout();
+  const [size, setSize] = React.useState({ rows: stdout.rows || 24, cols: stdout.columns || 80 });
+  React.useEffect(() => {
+    const onResize = () => setSize({ rows: stdout.rows || 24, cols: stdout.columns || 80 });
+    stdout.on('resize', onResize);
+    return () => { stdout.off('resize', onResize); };
+  }, [stdout]);
+  return size;
+}
+
+function WorkspaceTabBar({ ws, focusArea, cols }: { ws: WorkspaceState; focusArea: string; cols: number }) {
+  const showRightPanel = cols >= 100;
+  const rightLabel = ws.rightPanel === 'chat' ? 'AGENT OUTPUT' : 'SOURCE CONTROL';
+  const rightFocus = ws.rightPanel === 'chat' ? 'chat' : 'git';
+  const tabs: Array<{ id: string; label: string }> = [
+    { id: 'explorer', label: 'EXPLORER' },
+    { id: 'code', label: 'CODE' },
+    ...(showRightPanel ? [{ id: rightFocus, label: rightLabel }] : []),
+  ];
+
+  return (
+    <Box paddingX={1}>
+      {tabs.map((tab, i) => (
+        <React.Fragment key={tab.id}>
+          {i > 0 && <Text color="gray"> │ </Text>}
+          <Text
+            bold={focusArea === tab.id}
+            inverse={focusArea === tab.id}
+            color={focusArea === tab.id ? 'cyan' : 'gray'}
+          >
+            {' '}{tab.label}{' '}
+          </Text>
+        </React.Fragment>
+      ))}
+      <Spacer />
+      {showRightPanel && (
+        <>
+          <Text dimColor>^J {ws.rightPanel === 'chat' ? 'git' : 'chat'}</Text>
+          <Text color="gray"> · </Text>
+        </>
+      )}
+      <Text color="magenta">{ws.branch}</Text>
+    </Box>
+  );
+}
+
+function ExplorerPanel({
+  ws,
+  panelHeight,
+  isFocused,
+}: {
+  ws: WorkspaceState;
+  panelHeight: number;
+  isFocused: boolean;
+}) {
+  const windowSize = Math.max(1, panelHeight - 2); // leave room for header + footer
+  const explorerStart = Math.max(0, Math.min(ws.selectedIndex - Math.floor(windowSize / 2), Math.max(0, ws.nodes.length - windowSize)));
+  const visible = ws.nodes.slice(explorerStart, explorerStart + windowSize);
+
+  return (
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={isFocused ? 'cyan' : 'gray'}
+      overflow="hidden"
+      height={panelHeight}
+    >
+      <Box paddingX={1}>
+        <Text bold={isFocused} color={isFocused ? 'cyan' : 'gray'}>EXPLORER</Text>
+        <Spacer />
+        <Text dimColor>{ws.nodes.length}</Text>
+      </Box>
+      {visible.map((node, localIdx) => {
+        const idx = explorerStart + localIdx;
+        const isSelected = idx === ws.selectedIndex;
+        const prefix = node.isDir ? (node.expanded ? '▾' : '▸') : ' ';
+        const indent = ' '.repeat(Math.max(0, node.depth * 2));
+        return (
+          <Box key={node.id} paddingX={1}>
+            <Text
+              inverse={isSelected && isFocused}
+              color={isSelected ? 'white' : node.isDir ? 'blue' : 'gray'}
+              wrap="truncate-end"
+            >
+              {isSelected ? '›' : ' '} {indent}{prefix} {node.name}
+            </Text>
+          </Box>
+        );
+      })}
+      {visible.length < windowSize && Array.from({ length: windowSize - visible.length }, (_, i) => (
+        <Box key={`pad-${i}`}><Text> </Text></Box>
+      ))}
+    </Box>
+  );
+}
+
+function CodeViewerPanel({
+  ws,
+  panelHeight,
+  isFocused,
+}: {
+  ws: WorkspaceState;
+  panelHeight: number;
+  isFocused: boolean;
+}) {
+  const viewerLines = Math.max(1, panelHeight - 3); // header + separator + footer
+  const preview = ws.openedFilePreview;
+  const offset = ws.codeScrollOffset;
+  const totalLines = preview.length;
+  const visibleLines = preview.slice(offset, offset + viewerLines);
+  const lineNumWidth = Math.max(3, String(offset + viewerLines).length);
+  const fileName = ws.openedFilePath
+    ? ws.openedFilePath.replace(ws.rootPath + '/', '')
+    : '';
+
+  return (
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={isFocused ? 'cyan' : 'gray'}
+      overflow="hidden"
+      height={panelHeight}
+    >
+      <Box paddingX={1}>
+        <Text bold={isFocused} color={isFocused ? 'cyan' : 'gray'}>CODE</Text>
+        {fileName ? (
+          <>
+            <Text color="gray"> · </Text>
+            <Text color="white" wrap="truncate-end">{fileName}</Text>
+          </>
+        ) : null}
+        <Spacer />
+        {totalLines > 0 && (
+          <Text dimColor>{offset + 1}-{Math.min(offset + viewerLines, totalLines)}/{totalLines}</Text>
+        )}
+      </Box>
+      {!ws.openedFilePath ? (
+        <Box flexDirection="column" flexGrow={1} alignItems="center" justifyContent="center">
+          <Text dimColor>Select a file and press Enter</Text>
+          <Text dimColor>to preview its contents</Text>
+        </Box>
+      ) : (
+        <>
+          {visibleLines.map((line, i) => {
+            const lineNum = offset + i + 1;
+            return (
+              <Box key={`L${lineNum}`} paddingLeft={1}>
+                <Text color="gray">{String(lineNum).padStart(lineNumWidth, ' ')} │ </Text>
+                <Text wrap="truncate-end">{line || ' '}</Text>
+              </Box>
+            );
+          })}
+          {visibleLines.length < viewerLines && Array.from({ length: viewerLines - visibleLines.length }, (_, i) => (
+            <Box key={`cpad-${i}`} paddingLeft={1}>
+              <Text color="gray">{' '.repeat(lineNumWidth)} │</Text>
+            </Box>
+          ))}
+        </>
+      )}
+      <Box paddingX={1}>
+        <Text dimColor>
+          {isFocused ? '↑↓ scroll · PgUp/PgDn half page · Esc back' : 'Tab to focus'}
+        </Text>
+      </Box>
+    </Box>
+  );
+}
+
+function GitPanel({
+  ws,
+  panelHeight,
+  isFocused,
+  gitCursor,
+}: {
+  ws: WorkspaceState;
+  panelHeight: number;
+  isFocused: boolean;
+  gitCursor: number;
+}) {
+  const listHeight = Math.max(1, panelHeight - 6); // header + branch + staged/unstaged labels + footer + border
+  const gitStart = Math.max(0, Math.min(gitCursor - Math.floor(listHeight / 2), Math.max(0, ws.gitFiles.length - listHeight)));
+  const visible = ws.gitFiles.slice(gitStart, gitStart + listHeight);
+
+  return (
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={isFocused ? 'cyan' : 'gray'}
+      overflow="hidden"
+      height={panelHeight}
+    >
+      <Box paddingX={1}>
+        <Text bold={isFocused} color={isFocused ? 'cyan' : 'gray'}>GIT</Text>
+        <Spacer />
+        <Text color="magenta">{ws.branch}</Text>
+      </Box>
+      <Box paddingX={1}>
+        <Text color="green">● {ws.stagedCount} staged</Text>
+        <Text color="gray"> · </Text>
+        <Text color="yellow">○ {ws.unstagedCount} unstaged</Text>
+      </Box>
+      {visible.length === 0 ? (
+        <Box paddingX={1}><Text dimColor>Clean working tree</Text></Box>
+      ) : (
+        visible.map((f, localIdx) => {
+          const idx = gitStart + localIdx;
+          const isSelected = idx === gitCursor;
+          return (
+            <Box key={f.path} paddingX={1}>
+              <Text
+                inverse={isSelected && isFocused}
+                color={isSelected ? 'white' : f.staged ? 'green' : 'yellow'}
+                wrap="truncate-end"
+              >
+                {isSelected ? '›' : ' '} {f.staged ? '●' : '○'} {f.status} {f.path}
+              </Text>
+            </Box>
+          );
+        })
+      )}
+      {visible.length < listHeight && Array.from({ length: listHeight - visible.length }, (_, i) => (
+        <Box key={`gpad-${i}`}><Text> </Text></Box>
+      ))}
+      <Box paddingX={1}>
+        <Text dimColor>{isFocused ? 'Enter stage/unstage · /ws commit <msg>' : 'Tab to focus'}</Text>
+      </Box>
+    </Box>
+  );
+}
+
+function AgentOutputPanel({
+  state,
+  panelHeight,
+  isFocused,
+  scrollOffset,
+}: {
+  state: TuiState;
+  panelHeight: number;
+  isFocused: boolean;
+  scrollOffset: number;
+}) {
+  const viewLines = Math.max(1, panelHeight - 4); // header + thinking + footer + border
+
+  // Build a flat array of rendered lines from messages
+  const allLines: Array<{ key: string; node: React.ReactNode }> = [];
+
+  for (const msg of state.chatMessages) {
+    const roleColor = msg.role === 'user' ? 'yellow' : msg.role === 'system' ? 'gray' : 'cyan';
+    const prefix = msg.role === 'user' ? 'You' : msg.role === 'system' ? 'Sys' : state.agentName;
+    const contentLines = msg.content.split('\n');
+
+    // First line with role prefix
+    allLines.push({
+      key: `${msg.id}-0`,
+      node: (
+        <Box>
+          <Text color={roleColor} bold>{prefix}: </Text>
+          <Text wrap="truncate-end">{contentLines[0] || ''}</Text>
+        </Box>
+      ),
+    });
+
+    // Remaining lines indented
+    for (let i = 1; i < contentLines.length; i++) {
+      allLines.push({
+        key: `${msg.id}-${i}`,
+        node: (
+          <Box>
+            <Text> </Text>
+            <Text wrap="truncate-end" dimColor={msg.role === 'system'}>{contentLines[i]}</Text>
+          </Box>
+        ),
+      });
+    }
+
+    // Separator between messages
+    allLines.push({
+      key: `${msg.id}-sep`,
+      node: <Text dimColor>{'─'.repeat(3)}</Text>,
+    });
+  }
+
+  // Auto-scroll to bottom if no manual offset, or use scrollOffset
+  const totalLines = allLines.length;
+  const effectiveOffset = scrollOffset === 0
+    ? Math.max(0, totalLines - viewLines) // auto-scroll to bottom
+    : Math.max(0, Math.min(scrollOffset, totalLines - viewLines));
+
+  const visibleLines = allLines.slice(effectiveOffset, effectiveOffset + viewLines);
+  const hiddenAbove = effectiveOffset;
+  const hiddenBelow = Math.max(0, totalLines - effectiveOffset - viewLines);
+
+  return (
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={isFocused ? 'cyan' : 'gray'}
+      overflow="hidden"
+      height={panelHeight}
+    >
+      <Box paddingX={1}>
+        <Text bold={isFocused} color={isFocused ? 'cyan' : 'gray'}>AGENT OUTPUT</Text>
+        <Spacer />
+        <Text dimColor>{state.chatMessages.length} msg{state.chatMessages.length !== 1 ? 's' : ''}</Text>
+      </Box>
+      {hiddenAbove > 0 && (
+        <Box paddingX={1}><Text dimColor>↑ {hiddenAbove} line{hiddenAbove !== 1 ? 's' : ''} above</Text></Box>
+      )}
+      {visibleLines.length === 0 ? (
+        <Box flexDirection="column" flexGrow={1} alignItems="center" justifyContent="center">
+          <Text dimColor>No messages yet.</Text>
+          <Text dimColor>Type below to chat.</Text>
+        </Box>
+      ) : (
+        visibleLines.map((line) => (
+          <Box key={line.key} paddingX={1}>{line.node}</Box>
+        ))
+      )}
+      {/* Fill remaining space */}
+      {visibleLines.length > 0 && visibleLines.length < viewLines - (hiddenAbove > 0 ? 1 : 0) && (
+        Array.from({ length: viewLines - visibleLines.length - (hiddenAbove > 0 ? 1 : 0) }, (_, i) => (
+          <Box key={`apad-${i}`}><Text> </Text></Box>
+        ))
+      )}
+      {state.isThinking && (
+        <Box paddingX={1}>
+          <Text color="cyan">⠋ </Text>
+          <Text color="cyan" bold>{state.agentName}</Text>
+          <Text dimColor> · </Text>
+          <Text wrap="truncate-end">{(() => {
+            const running = [...state.toolSteps].reverse().find((s) => s.status === 'running');
+            return running ? running.label : 'Thinking...';
+          })()}</Text>
+        </Box>
+      )}
+      <Box paddingX={1}>
+        <Text dimColor>{isFocused ? '↑↓ scroll · Ctrl+G git · Esc back' : 'Ctrl+J focus'}</Text>
+      </Box>
+    </Box>
+  );
+}
+
 function WorkspaceBody({ state, workspacePane, detailCursor, gitCursor }: { state: TuiState; workspacePane: 'files' | 'details' | 'git'; detailCursor: number; gitCursor: number }) {
   const ws = state.workspace;
+  const { rows, cols } = useTerminalSize();
+
   if (!ws?.active) {
     return (
       <Box flexDirection="column" flexGrow={1} paddingX={1}>
@@ -773,103 +1233,70 @@ function WorkspaceBody({ state, workspacePane, detailCursor, gitCursor }: { stat
     );
   }
 
-  const selectedNode = ws.nodes[ws.selectedIndex];
-  const selectedRel = selectedNode ? selectedNode.path.replace(ws.rootPath + '/', '') : '';
-  const explorerWindow = 12;
-  const explorerStart = Math.max(0, Math.min(ws.selectedIndex - Math.floor(explorerWindow / 2), Math.max(0, ws.nodes.length - explorerWindow)));
-  const visibleExplorerNodes = ws.nodes.slice(explorerStart, explorerStart + explorerWindow);
-  const gitWindow = 12;
-  const gitStart = Math.max(0, Math.min(gitCursor - Math.floor(gitWindow / 2), Math.max(0, ws.gitFiles.length - gitWindow)));
-  const visibleGitFiles = ws.gitFiles.slice(gitStart, gitStart + gitWindow);
+  const focusArea = ws.focusArea;
+  const rightPanel = ws.rightPanel;
+
+  // Layout math: rows budget
+  // statusBar(2) + tabBar(1) + inputBox(3) = 6 fixed rows
+  const fixedOverhead = 6;
+  const idePanelHeight = Math.max(8, rows - fixedOverhead);
+
+  // Column widths — 3 columns: explorer | code | right panel (chat or git)
+  let explorerWidth: number;
+  let rightWidth: number;
+
+  if (cols >= 140) {
+    explorerWidth = Math.floor(cols * 0.18);
+    rightWidth = Math.floor(cols * 0.28);
+  } else if (cols >= 120) {
+    explorerWidth = Math.floor(cols * 0.18);
+    rightWidth = Math.floor(cols * 0.26);
+  } else if (cols >= 100) {
+    explorerWidth = Math.floor(cols * 0.22);
+    rightWidth = Math.floor(cols * 0.28);
+  } else {
+    // Narrow: explorer + code only, no right panel
+    explorerWidth = Math.floor(cols * 0.30);
+    rightWidth = 0;
+  }
 
   return (
     <Box flexDirection="column" flexGrow={1}>
-      <Box paddingX={1}>
-        <Text color="gray">Workspace: </Text><Text color="cyan">{ws.rootPath}</Text>
-        <Text color="gray"> | Branch: </Text><Text color="magenta">{ws.branch}</Text>
-        <Text color="gray"> | Pane: </Text><Text color="white">{workspacePane.toUpperCase()}</Text>
-        <Text color="gray"> | </Text><Text color="green" bold>CODING IDE</Text>
-      </Box>
-      <Box paddingX={1}><Text color="gray">{'═'.repeat(118)}</Text></Box>
-      <Box flexDirection="row" height={16}>
-        <Box flexDirection="column" width={36} paddingX={1}>
-          <Text bold color={workspacePane === 'files' ? 'white' : 'cyan'}>EXPLORER {workspacePane === 'files' ? '●' : '○'}</Text>
-          <Text color="gray">{'─'.repeat(34)}</Text>
-          {visibleExplorerNodes.map((node, localIdx) => {
-            const idx = explorerStart + localIdx;
-            const isSelected = idx === ws.selectedIndex;
-            const prefix = node.isDir ? (node.expanded ? '▾' : '▸') : ' ';
-            const indent = ' '.repeat(Math.max(0, node.depth * 2));
-            return (
-              <Text key={node.id} color={isSelected ? 'white' : 'gray'}>
-                {isSelected ? '›' : ' '} {indent}{prefix} {node.name}
-              </Text>
-            );
-          })}
-          <Text dimColor>{ws.nodes.length > explorerWindow ? `Showing ${explorerStart + 1}-${Math.min(ws.nodes.length, explorerStart + explorerWindow)} of ${ws.nodes.length}` : `${ws.nodes.length} items`}</Text>
+      <WorkspaceTabBar ws={ws} focusArea={focusArea} cols={cols} />
+      <Box flexDirection="row">
+        <Box width={explorerWidth}>
+          <ExplorerPanel
+            ws={ws}
+            panelHeight={idePanelHeight}
+            isFocused={focusArea === 'explorer'}
+          />
         </Box>
-        <Box><Text color="gray">│</Text></Box>
-        <Box flexDirection="column" width={52} paddingX={1}>
-          {workspacePane === 'files' ? (
-            <>
-              <Text bold color="cyan">PREVIEW</Text>
-              <Text color="gray">{'─'.repeat(50)}</Text>
-              <Text>{selectedRel || ws.rootPath}</Text>
-              {ws.openedFilePath ? (
-                ws.openedFilePreview.slice(0, 10).map((line, i) => (
-                  <Text key={`${i}:${line.slice(0, 10)}`} dimColor>{String(i + 1).padStart(3, ' ')} {line}</Text>
-                ))
-              ) : (
-                <Text dimColor>Select a file and press Enter</Text>
-              )}
-            </>
-          ) : workspacePane === 'git' ? (
-            <>
-              <Text bold color="cyan">GIT INSPECTOR</Text>
-              <Text color="gray">{'─'.repeat(50)}</Text>
-              <Text>Staged: <Text color="green">{ws.stagedCount}</Text> · Unstaged: <Text color="yellow">{ws.unstagedCount}</Text></Text>
-              {visibleGitFiles.length === 0 ? <Text dimColor>Clean working tree</Text> : visibleGitFiles.map((f, localIdx) => {
-                const idx = gitStart + localIdx;
-                return <Text key={f.path} color={idx === gitCursor ? 'white' : (f.staged ? 'green' : 'yellow')}>{idx === gitCursor ? '›' : ' '} {f.staged ? '●' : '○'} {f.status} {f.path}</Text>;
-              })}
-              <Text dimColor>{ws.gitFiles.length > gitWindow ? `Showing ${gitStart + 1}-${Math.min(ws.gitFiles.length, gitStart + gitWindow)} of ${ws.gitFiles.length}` : `${ws.gitFiles.length} files`}</Text>
-            </>
-          ) : (
-            <>
-              <Text bold color="cyan">DETAILS</Text>
-              <Text color="gray">{'─'.repeat(50)}</Text>
-              <Text>Selected: <Text color="yellow">{selectedRel || ws.rootPath}</Text></Text>
-              <Text>Mode: <Text color={state.programmingMode === 'execute' ? 'green' : 'yellow'}>{state.programmingMode.toUpperCase()}</Text></Text>
-              {state.subAgents.length > 0 && <AgentPanelView agents={state.subAgents} />}
-            </>
-          )}
+        <Box flexGrow={1}>
+          <CodeViewerPanel
+            ws={ws}
+            panelHeight={idePanelHeight}
+            isFocused={focusArea === 'code'}
+          />
         </Box>
-        <Box><Text color="gray">│</Text></Box>
-        <Box flexDirection="column" flexGrow={1} paddingX={1}>
-          <Text bold color={workspacePane === 'git' ? 'white' : 'cyan'}>SOURCE CONTROL {workspacePane === 'git' ? '●' : '○'}</Text>
-          <Text color="gray">{'─'.repeat(26)}</Text>
-          <Text>Branch: <Text color="magenta">{ws.branch}</Text></Text>
-          <Text>Staged: <Text color="green">{ws.stagedCount}</Text></Text>
-          <Text>Unstaged: <Text color="yellow">{ws.unstagedCount}</Text></Text>
-          <Text color="gray">{'─'.repeat(26)}</Text>
-          {visibleGitFiles.length === 0 ? <Text dimColor>Clean working tree</Text> : visibleGitFiles.map((f, localIdx) => {
-            const idx = gitStart + localIdx;
-            return <Text key={`side-${f.path}`} color={idx === gitCursor ? 'white' : (f.staged ? 'green' : 'yellow')}>{idx === gitCursor ? '›' : ' '} {f.status} {f.path}</Text>;
-          })}
-          <Text dimColor>Enter stages selected file</Text>
-          <Text dimColor>/ws stage all · /ws commit &lt;msg&gt;</Text>
-        </Box>
-      </Box>
-      <Box paddingX={1}><Text color="gray">{'═'.repeat(118)}</Text></Box>
-      <Box flexDirection="column" flexGrow={1} paddingX={1}>
-        <Text bold color="cyan">Chat · Workspace Coding Session</Text>
-        <Text dimColor>Ask implementation questions, refactors, tests, and git actions for this project context.</Text>
-        <ChatMessagesView messages={state.chatMessages} agentName={state.agentName} />
-        {state.toolSteps.length > 0 && <ToolStepsView steps={state.toolSteps} viewMode={state.viewMode} />}
-        {state.isThinking && <ThinkingIndicator agentName={state.agentName} steps={state.toolSteps} mode={state.mode} />}
-      </Box>
-      <Box paddingX={1}>
-        <Text dimColor>Esc/Ctrl+Q Exit Workspace · Ctrl+P Plan · Ctrl+X Execute · Ctrl+E Explorer · Ctrl+G Git</Text>
+        {rightWidth > 0 && (
+          <Box width={rightWidth}>
+            {rightPanel === 'chat' ? (
+              <AgentOutputPanel
+                state={state}
+                panelHeight={idePanelHeight}
+                isFocused={focusArea === 'chat'}
+                scrollOffset={ws.chatScrollOffset}
+              />
+            ) : (
+              <GitPanel
+                ws={ws}
+                panelHeight={idePanelHeight}
+                isFocused={focusArea === 'git'}
+                gitCursor={gitCursor}
+              />
+            )}
+          </Box>
+        )}
       </Box>
     </Box>
   );
@@ -948,15 +1375,56 @@ function ChatMessagesView({ messages, agentName }: { messages: ChatMessage[]; ag
   if (messages.length === 0) return null;
   const visible = messages.slice(-50);
   const cache = React.useRef<Map<string, string>>(new Map());
+  const wasStreaming = React.useRef<Set<string>>(new Set());
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1}>
       {visible.map((msg) => {
-        const roleColor = msg.role === 'user' ? 'yellow' : msg.role === 'system' ? 'gray' : 'cyan';
-        const prefix = msg.role === 'user' ? 'You' : msg.role === 'system' ? 'System' : agentName;
+        const isCompletion = msg.role === 'system' && msg.content.startsWith('━━━');
+        const roleColor = isCompletion ? 'green' : msg.role === 'user' ? 'yellow' : msg.role === 'system' ? 'gray' : 'cyan';
+        const prefix = msg.role === 'user' ? 'You' : msg.role === 'system' ? '' : agentName;
+        if (isCompletion) {
+          const meta = msg.completionMeta;
+          const formatTokens = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+          return (
+            <Box key={msg.id} flexDirection="column" marginBottom={1}>
+              <Text color="green" bold>{msg.content}</Text>
+              {meta && (
+                <Box flexDirection="row" paddingLeft={2}>
+                  <Text color="gray">☿ </Text>
+                  <Text color="white" bold>{meta.model}</Text>
+                  <Text color="gray"> via </Text>
+                  <Text color="cyan">{meta.provider}</Text>
+                  <Text color="gray"> · </Text>
+                  <Text color="yellow">{formatTokens(meta.totalTokens)}</Text>
+                  <Text color="gray"> tokens · Budget </Text>
+                  {(() => {
+                    const pct = Math.round(meta.budgetPercentage);
+                    const barLen = 16;
+                    const filled = Math.round((pct / 100) * barLen);
+                    const barColor = pct >= 90 ? 'red' : pct >= 70 ? 'yellow' : 'green';
+                    return (
+                      <>
+                        <Text color={barColor}>{'█'.repeat(filled)}</Text>
+                        <Text color="gray">{'░'.repeat(barLen - filled)}</Text>
+                        <Text color={barColor}> {pct}%</Text>
+                      </>
+                    );
+                  })()}
+                </Box>
+              )}
+            </Box>
+          );
+        }
         let rendered: string;
         if (msg.streaming) {
           rendered = renderMarkdown(msg.content);
           cache.current.set(msg.id, rendered);
+          wasStreaming.current.add(msg.id);
+        } else if (wasStreaming.current.has(msg.id)) {
+          // Streaming just ended — re-render with final complete content
+          rendered = renderMarkdown(msg.content);
+          cache.current.set(msg.id, rendered);
+          wasStreaming.current.delete(msg.id);
         } else {
           rendered = cache.current.get(msg.id) ?? renderMarkdown(msg.content);
           cache.current.set(msg.id, rendered);
@@ -979,60 +1447,86 @@ function ChatMessagesView({ messages, agentName }: { messages: ChatMessage[]; ag
 }
 
 function ToolStepsView({ steps, viewMode }: { steps: ToolStep[]; viewMode: 'balanced' | 'detailed' }) {
-  const visible = viewMode === 'detailed' ? steps.slice(-20) : steps.slice(-1);
-  const runningCount = visible.filter((s) => s.status === 'running').length;
-  const doneCount = visible.filter((s) => s.status === 'done').length;
+  const visible = viewMode === 'detailed' ? steps.slice(-20) : steps.slice(-5);
+  const totalDone = steps.filter((s) => s.status === 'done').length;
+  const totalRunning = steps.filter((s) => s.status === 'running').length;
+  const hiddenCount = Math.max(0, steps.length - visible.length);
   return (
     <Box flexDirection="column" marginLeft={2} marginTop={1}>
-      <Text color="gray">Activity · {viewMode === 'balanced' ? 'minimal' : 'detailed'} · {runningCount > 0 ? `${runningCount} running` : `${doneCount} completed`}</Text>
+      <Box>
+        <Text color="gray">Activity</Text>
+        <Text dimColor> · {totalDone} done{totalRunning > 0 ? `, ${totalRunning} running` : ''}</Text>
+        {hiddenCount > 0 && <Text dimColor> · {hiddenCount} earlier steps hidden</Text>}
+      </Box>
       {visible.map((step) => (
         <Box key={step.id}>
           <Text>
             {step.status === 'running' ? '⏳' : step.status === 'done' ? '✅' : '❌'}
           </Text>
           <Text> </Text>
-          <Text dimColor>{step.label}</Text>
+          <Text dimColor={step.status === 'done'} color={step.status === 'running' ? 'cyan' : undefined} bold={step.status === 'running'}>{step.label}</Text>
           {step.status === 'running' && <Text color="yellow"> …</Text>}
           {step.status === 'done' && step.elapsed != null && <Text dimColor> ({step.elapsed.toFixed(1)}s)</Text>}
           {viewMode === 'detailed' && step.result && <Text dimColor> · {step.result}</Text>}
         </Box>
       ))}
-      <Text dimColor>Ctrl+V toggles Minimal/Detailed (or use /view)</Text>
+      <Text dimColor>Ctrl+T toggles view · /progress for full history</Text>
     </Box>
   );
 }
 
 function ThinkingIndicator({ agentName, steps, mode }: { agentName: string; steps: ToolStep[]; mode: AppMode }) {
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-  const codingPhases = ['indexing symbols', 'building plan', 'running checks', 'linking context'];
-  const chatPhases = ['reading your message', 'gathering context', 'drafting response', 'polishing answer'];
-  const phases = (mode === 'coding' || mode === 'workspace') ? codingPhases : chatPhases;
   const [frame, setFrame] = React.useState(0);
+  const [elapsed, setElapsed] = React.useState(0);
+  const startRef = React.useRef(Date.now());
 
   React.useEffect(() => {
+    startRef.current = Date.now();
     const timer = setInterval(() => {
-      setFrame((v) => (v + 1) % (frames.length * phases.length));
-    }, 90);
+      setFrame((v) => (v + 1) % frames.length);
+      setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+    }, 80);
     return () => clearInterval(timer);
   }, []);
 
   const spinner = frames[frame % frames.length];
-  const phase = phases[Math.floor(frame / frames.length) % phases.length];
-  const pulse = '.'.repeat((frame % 3) + 1);
   const runningStep = [...steps].reverse().find((s) => s.status === 'running');
-  const livePhase = runningStep ? `running: ${runningStep.label}` : phase;
+  const doneSteps = steps.filter((s) => s.status === 'done');
+  const totalSteps = steps.length;
+
+  // Determine current action label
+  const currentAction = runningStep
+    ? runningStep.label
+    : (mode === 'coding' || mode === 'workspace') ? 'Analyzing code' : 'Composing response';
+
+  // Format elapsed time
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
 
   return (
     <Box marginTop={1} marginLeft={2} flexDirection="column">
       <Box>
         <Text color="cyan">{spinner}</Text>
         <Text> </Text>
-        <Text color="cyan" bold>{agentName}</Text>
-        <Text dimColor> is thinking{pulse}</Text>
+        <Text color="cyan" bold>{totalSteps > 0 ? agentName : 'Processing'}</Text>
+        <Text dimColor>{totalSteps > 0 ? ` · step ${totalSteps} · ${timeStr}` : ` · ${timeStr}`}</Text>
       </Box>
-      <Box marginLeft={2}>
-        <Text color="gray">↳ {livePhase}</Text>
+      <Box marginLeft={4}>
+        <Text color="white" bold>{currentAction}</Text>
       </Box>
+      {doneSteps.length > 0 && (
+        <Box flexDirection="column" marginLeft={4} marginTop={0}>
+          {doneSteps.slice(-3).map((step) => (
+            <Box key={step.id}>
+              <Text color="green">✓</Text>
+              <Text dimColor> {step.label}</Text>
+              {step.elapsed != null && <Text dimColor> ({step.elapsed.toFixed(1)}s)</Text>}
+            </Box>
+          ))}
+        </Box>
+      )}
     </Box>
   );
 }
@@ -1128,11 +1622,13 @@ function PermPromptView({ prompt, activeIdx }: { prompt: PermissionPromptState; 
 
 function InputBox({
   input,
+  cursorPos,
   mode,
   programmingMode,
   projectContext,
 }: {
   input: string;
+  cursorPos: number;
   mode: AppMode;
   programmingMode: ProgrammingModeState;
   projectContext: string | null;
@@ -1145,6 +1641,20 @@ function InputBox({
     ? `...${projectContext.slice(-49)}`
     : (projectContext || 'No project context');
 
+  // Split input into lines and figure out which line/col the cursor is on
+  const lines = input.split('\n');
+  let cursorLine = 0;
+  let cursorCol = cursorPos;
+  let consumed = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (consumed + lines[i].length >= cursorPos && i < lines.length - 1 ? consumed + lines[i].length + 1 > cursorPos : true) {
+      cursorLine = i;
+      cursorCol = cursorPos - consumed;
+      break;
+    }
+    consumed += lines[i].length + 1; // +1 for \n
+  }
+
   return (
     <Box flexDirection="column">
       <Text color="dim">{'─'.repeat(60)}</Text>
@@ -1155,13 +1665,24 @@ function InputBox({
           mode={programmingMode.toUpperCase()}
         </Text>
       </Box>
-      <Box paddingX={1}>
-        <Text color={promptColor} bold>{'>'} </Text>
-        <Text>{input}</Text>
-        <Text dimColor>█</Text>
+      <Box paddingX={1} flexDirection="column">
+        {lines.map((line, i) => (
+          <Box key={i}>
+            <Text color={promptColor} bold>{i === 0 ? '> ' : '  '}</Text>
+            {i === cursorLine ? (
+              <>
+                <Text>{line.slice(0, cursorCol)}</Text>
+                <Text inverse>{cursorCol < line.length ? line[cursorCol] : ' '}</Text>
+                <Text>{cursorCol < line.length ? line.slice(cursorCol + 1) : ''}</Text>
+              </>
+            ) : (
+              <Text>{line}</Text>
+            )}
+          </Box>
+        ))}
       </Box>
       <Box paddingX={1}>
-        <Text dimColor>{inWorkspace ? 'IDE chat active. Esc exits workspace. Ctrl+P Plan · Ctrl+X Execute.' : inCoding ? 'Coding chat active. Ctrl+P Plan · Ctrl+X Execute.' : 'Type a prompt, then Enter.'}</Text>
+        <Text dimColor>{inWorkspace ? 'Tab switch panels · Ctrl+J chat · Ctrl+P Plan · Ctrl+X Execute · Esc back/exit' : inCoding ? 'Coding chat active. Ctrl+P Plan · Ctrl+X Execute.' : 'Enter send · Ctrl+N newline'}</Text>
       </Box>
     </Box>
   );

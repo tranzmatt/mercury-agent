@@ -19,7 +19,8 @@ import { BackgroundTaskManager } from './background-tasks.js';
 import { logger } from '../utils/logger.js';
 import { CLIChannel } from '../channels/cli.js';
 import { TelegramChannel } from '../channels/telegram.js';
-import { formatToolStep } from '../utils/tool-label.js';
+import { formatToolStep, formatNarrative, type NarrativeStep } from '../utils/tool-label.js';
+import { getTelegramHelp } from '../utils/manual.js';
 import type { ArrowSelectOption } from '../utils/arrow-select.js';
 import { setAskUserHandler } from '../capabilities/interaction/ask-user.js';
 import type { SpotifyClient } from '../spotify/client.js';
@@ -40,46 +41,39 @@ import {
 } from '../utils/config.js';
 
 class ToolCallLoopDetector {
-  private recentCalls: Array<{ tool: string; params: string; failed: boolean }> = [];
+  private recentCalls: Array<{ tool: string; params: string; failed: boolean; timestamp: number }> = [];
   private totalCalls = 0;
   private hardAborted = false;
   private recentStepTexts: Array<string> = [];
   private consecutiveNoActionSteps = 0;
 
-  private static readonly ABSOLUTE_MAX = 25;
-  private static readonly FAILED_ABSOLUTE_MAX = 12;
-  private static readonly NO_ACTION_MAX = 5;
+  // --- Limits ---
+  private static readonly ABSOLUTE_MAX = 75;
+  private static readonly FAILED_ABSOLUTE_MAX = 20;
+  private static readonly NO_ACTION_MAX = 6;
 
+  // Tools that naturally repeat in productive work
   private static readonly HIGH_TOLERANCE_TOOLS = new Set([
-    'fetch_url',
-    'read_file',
-    'list_dir',
-    'web_search',
-    'github_api',
+    'fetch_url', 'read_file', 'list_dir', 'web_search', 'github_api',
+    'run_command', 'edit_file', 'write_file', 'create_file',
+    'git_status', 'git_diff', 'git_log',
   ]);
 
-  private static readonly IDENTICAL_THRESHOLD = 3;
-  private static readonly SIMILAR_THRESHOLD = 4;
-  private static readonly TEXT_REPEAT_THRESHOLD = 3;
-  private static readonly MAX_STEP_TEXTS = 12;
-
-  private static getSameToolThreshold(toolName: string, failingCount: number): number {
-    const baseHigh = 5;
-    const baseNormal = 3;
-    const isHigh = ToolCallLoopDetector.HIGH_TOLERANCE_TOOLS.has(toolName);
-    let threshold = isHigh ? baseHigh : baseNormal;
-    if (failingCount >= 3) {
-      threshold = Math.min(threshold, isHigh ? 3 : 2);
-    }
-    return threshold;
-  }
+  // --- Thresholds ---
+  // Identical = same tool + same params (always a true loop)
+  private static readonly IDENTICAL_THRESHOLD = 4;
+  // Similar = same tool, all failing
+  private static readonly SIMILAR_THRESHOLD = 6;
+  // Text repetition in model output
+  private static readonly TEXT_REPEAT_THRESHOLD = 4;
+  private static readonly MAX_STEP_TEXTS = 15;
 
   record(toolName: string, params: Record<string, any>, failed: boolean = false): void {
-    const paramsKey = JSON.stringify(params).slice(0, 200);
-    this.recentCalls.push({ tool: toolName, params: paramsKey, failed });
+    const paramsKey = JSON.stringify(params).slice(0, 300);
+    this.recentCalls.push({ tool: toolName, params: paramsKey, failed, timestamp: Date.now() });
     this.totalCalls++;
     this.consecutiveNoActionSteps = 0;
-    if (this.recentCalls.length > 30) {
+    if (this.recentCalls.length > 40) {
       this.recentCalls.shift();
     }
   }
@@ -106,11 +100,13 @@ class ToolCallLoopDetector {
     return false;
   }
 
+  /**
+   * Identical loop: same tool + exact same params repeated.
+   * This is always a true stuck loop — no productive work produces identical calls.
+   */
   detectIdentical(): { tool: string; count: number; message: string } | null {
     if (this.recentCalls.length < 3) return null;
-
     const last = this.recentCalls[this.recentCalls.length - 1];
-
     let identicalCount = 0;
     for (let i = this.recentCalls.length - 1; i >= 0; i--) {
       if (this.recentCalls[i].tool === last.tool && this.recentCalls[i].params === last.params) {
@@ -119,77 +115,60 @@ class ToolCallLoopDetector {
         break;
       }
     }
-
     if (identicalCount >= ToolCallLoopDetector.IDENTICAL_THRESHOLD) {
       this.hardAborted = true;
       return {
         tool: last.tool,
         count: identicalCount,
-        message: `[SYSTEM] You called "${last.tool}" ${identicalCount} times with identical parameters and got the same result. This is a hard loop — stop immediately.`,
+        message: `Identical call detected: "${last.tool}" called ${identicalCount}x with the exact same parameters.`,
       };
     }
-
     return null;
   }
 
+  /**
+   * Failing loop: same tool called repeatedly, all calls failing.
+   * Different params but consistently failing = stuck on a broken approach.
+   */
   detectSimilarLoop(): { tool: string; count: number; message: string } | null {
     if (this.recentCalls.length < 4) return null;
-
     const last = this.recentCalls[this.recentCalls.length - 1];
-    let similarCount = 0;
-
+    let failCount = 0;
     for (let i = this.recentCalls.length - 1; i >= 0; i--) {
       const call = this.recentCalls[i];
       if (call.tool !== last.tool) break;
-      if (call.failed || last.failed) {
-        similarCount++;
-      } else {
-        break;
-      }
+      if (call.failed) failCount++;
+      else break;
     }
-
-    if (similarCount >= ToolCallLoopDetector.SIMILAR_THRESHOLD) {
+    if (failCount >= ToolCallLoopDetector.SIMILAR_THRESHOLD) {
       this.hardAborted = true;
       return {
         tool: last.tool,
-        count: similarCount,
-        message: `[SYSTEM] You called "${last.tool}" ${similarCount} times with different params but all are failing. This is a failing loop — stop immediately. Tell the user you cannot complete this task.`,
+        count: failCount,
+        message: `Failing loop: "${last.tool}" called ${failCount}x, all failing.`,
       };
     }
-
     return null;
   }
 
   detectTextRepetition(): { pattern: string; count: number } | null {
     if (this.recentStepTexts.length < ToolCallLoopDetector.TEXT_REPEAT_THRESHOLD) return null;
-
     const texts = this.recentStepTexts;
     const last = texts[texts.length - 1];
-
     let repeatCount = 0;
     for (let i = texts.length - 1; i >= 0; i--) {
-      const similarity = this.textSimilarity(last, texts[i]);
-      if (similarity >= 0.7) {
-        repeatCount++;
-      } else {
-        break;
-      }
+      if (this.textSimilarity(last, texts[i]) >= 0.7) repeatCount++;
+      else break;
     }
-
     if (repeatCount >= ToolCallLoopDetector.TEXT_REPEAT_THRESHOLD) {
-      return {
-        pattern: last.slice(0, 60),
-        count: repeatCount,
-      };
+      return { pattern: last.slice(0, 60), count: repeatCount };
     }
-
     return null;
   }
 
   private textSimilarity(a: string, b: string): number {
     if (a === b) return 1;
     if (!a || !b) return 0;
-
     const setA = new Set(a.split(' '));
     const setB = new Set(b.split(' '));
     const intersection = [...setA].filter(w => setB.has(w)).length;
@@ -197,47 +176,88 @@ class ToolCallLoopDetector {
     return union === 0 ? 0 : intersection / union;
   }
 
-  detectSameTool(): { tool: string; count: number } | null {
-    if (this.recentCalls.length < 3) return null;
+  /**
+   * Smart repetition analysis: detects same-tool runs but evaluates whether
+   * the work is productive based on parameter diversity and success rate.
+   *
+   * Returns null if no concern, or an analysis object with:
+   * - tool, count: what's repeating
+   * - paramDiversity: 0-1, how varied the parameters are (1 = all unique)
+   * - successRate: 0-1, fraction of calls that succeeded
+   * - verdict: 'productive' | 'suspicious' | 'stuck'
+   */
+  analyzeRepetition(): {
+    tool: string;
+    count: number;
+    paramDiversity: number;
+    successRate: number;
+    verdict: 'productive' | 'suspicious' | 'stuck';
+  } | null {
+    if (this.recentCalls.length < 5) return null;
 
+    // Find the consecutive run of the same tool
     const last = this.recentCalls[this.recentCalls.length - 1];
-
-    let consecutiveCount = 0;
-    let failingConsecutive = 0;
+    const run: typeof this.recentCalls = [];
     for (let i = this.recentCalls.length - 1; i >= 0; i--) {
-      if (this.recentCalls[i].tool === last.tool) {
-        consecutiveCount++;
-        if (this.recentCalls[i].failed) failingConsecutive++;
-      } else {
-        break;
-      }
+      if (this.recentCalls[i].tool === last.tool) run.unshift(this.recentCalls[i]);
+      else break;
     }
 
-    const threshold = ToolCallLoopDetector.getSameToolThreshold(last.tool, failingConsecutive);
-    if (consecutiveCount >= threshold) {
-      return { tool: last.tool, count: consecutiveCount };
+    // Need a meaningful run length to analyze
+    const isHigh = ToolCallLoopDetector.HIGH_TOLERANCE_TOOLS.has(last.tool);
+    const minRun = isHigh ? 10 : 6;
+    if (run.length < minRun) return null;
+
+    // Parameter diversity: how many unique param sets vs total calls
+    const uniqueParams = new Set(run.map(c => c.params));
+    const paramDiversity = uniqueParams.size / run.length;
+
+    // Success rate
+    const successes = run.filter(c => !c.failed).length;
+    const successRate = successes / run.length;
+
+    // Verdict logic
+    let verdict: 'productive' | 'suspicious' | 'stuck';
+    if (paramDiversity >= 0.6 && successRate >= 0.7) {
+      // High diversity + mostly succeeding = productive iteration
+      // e.g., fetching 20 different URLs, reading 15 different files
+      verdict = 'productive';
+    } else if (successRate < 0.3) {
+      // Mostly failing = stuck
+      verdict = 'stuck';
+    } else if (paramDiversity < 0.2 && successRate < 0.5) {
+      // Low diversity + mediocre success = suspicious
+      verdict = 'stuck';
+    } else if (paramDiversity < 0.3) {
+      // Low diversity but succeeding — suspicious (might be retrying similar things)
+      verdict = 'suspicious';
+    } else {
+      // Moderate diversity, moderate success — let it run but flag
+      verdict = 'suspicious';
     }
 
-    if (this.recentCalls.length >= 6) {
-      const lastN = this.recentCalls.slice(-6);
-      const toolCounts: Record<string, number> = {};
-      for (const call of lastN) {
-        toolCounts[call.tool] = (toolCounts[call.tool] || 0) + 1;
-      }
-      for (const [tool, count] of Object.entries(toolCounts)) {
-        if (count >= 5) {
-          return { tool, count };
-        }
-      }
-    }
-
-    return null;
+    return {
+      tool: last.tool,
+      count: run.length,
+      paramDiversity,
+      successRate,
+      verdict,
+    };
   }
 
   isHardAborted(): boolean {
     return this.hardAborted;
   }
 
+  /** Return human-readable summaries of recent calls for AI self-check */
+  getRecentCallSummaries(): string[] {
+    return this.recentCalls.slice(-10).map(c => {
+      const params = c.params.length > 100 ? c.params.slice(0, 97) + '...' : c.params;
+      return `${c.tool}(${params})${c.failed ? ' [FAILED]' : ' [OK]'}`;
+    });
+  }
+
+  /** Reset all loop detection state */
   reset(): void {
     this.recentCalls = [];
     this.totalCalls = 0;
@@ -247,8 +267,14 @@ class ToolCallLoopDetector {
   }
 }
 
-const MAX_STEPS = 10;
-const MAX_RESPONSE_TOKENS = 1600;
+const MAX_STEPS = 25;
+const MAX_RESPONSE_TOKENS = 4096;
+const HEARTBEAT_INITIAL_MS = 20000;
+const HEARTBEAT_MAX_MS = 60000;
+const LONG_TASK_HANDOFF_SUGGEST_MS = 45000;
+const MAX_FOREGROUND_WALL_MS = 10 * 60 * 1000;
+const MAX_STALL_MS = 4 * 60 * 1000;
+const MAX_SELF_CHECKS = 3; // max AI self-checks per request before hard-aborting
 
 export class Agent {
   readonly lifecycle: Lifecycle;
@@ -260,7 +286,10 @@ export class Agent {
   private telegramStreaming: boolean;
   private currentMessage: ChannelMessage | null = null;
   private currentAbort: AbortController | null = null;
-  private autoBackgroundHandoff = false;
+  private lastProgressAt = 0;
+  private currentActivity = '';
+  private completedStepCount = 0;
+  private stepNarrative: import('../utils/tool-label.js').NarrativeStep[] = [];
   private supervisor?: import('../core/supervisor.js').SubAgentSupervisor;
   readonly programmingMode: ProgrammingMode;
   private spotifyClient?: SpotifyClient;
@@ -335,23 +364,6 @@ export class Agent {
 
     const trimmed = msg.content.trim();
 
-    if (
-      this.processing &&
-      !trimmed.startsWith('/') &&
-      msg.channelType !== 'internal' &&
-      this.supervisor &&
-      this.currentMessage &&
-      this.currentAbort &&
-      !this.currentAbort.signal.aborted &&
-      !this.autoBackgroundHandoff &&
-      this.currentMessage.channelType === msg.channelType &&
-      this.currentMessage.channelId === msg.channelId
-    ) {
-      void this.autoBackgroundCurrentTask(msg).catch((err) => {
-        logger.warn({ err }, 'Auto-background handoff failed');
-      });
-    }
-
     if (this.processing && trimmed.startsWith('/')) {
       this.handleFastPathCommand(msg).catch((err) => {
         logger.error({ err, content: trimmed.slice(0, 50) }, 'Fast-path command failed');
@@ -361,37 +373,6 @@ export class Agent {
 
     this.messageQueue.push(msg);
     this.processQueue();
-  }
-
-  private async autoBackgroundCurrentTask(interruptMsg: ChannelMessage): Promise<void> {
-    if (!this.currentMessage || !this.currentAbort || !this.supervisor) return;
-    if (this.currentAbort.signal.aborted || this.autoBackgroundHandoff) return;
-    this.autoBackgroundHandoff = true;
-    try {
-      const taskDescription = this.currentMessage.content.trim();
-      if (!taskDescription) return;
-
-      this.currentAbort.abort();
-
-      const agentId = await this.supervisor.spawn({
-        task: taskDescription,
-        sourceChannelId: this.currentMessage.channelId,
-        sourceChannelType: this.currentMessage.channelType as any,
-        workingDirectory: this.capabilities.getCwd(),
-      });
-      const bgId = this.backgroundTasks.spawnAgent(taskDescription, this.capabilities.getCwd(), agentId);
-      this.syncBgTasksToTui();
-
-      const channel = this.channels.getChannelForMessage(interruptMsg);
-      if (channel) {
-        await channel.send(
-          `📋 I moved the in-progress task to background (${bgId}) so I can respond now. Use /bg ${bgId} or /bg list for progress.`,
-          interruptMsg.channelId,
-        ).catch(() => {});
-      }
-    } finally {
-      this.autoBackgroundHandoff = false;
-    }
   }
 
   private async handleFastPathCommand(msg: ChannelMessage): Promise<void> {
@@ -438,8 +419,24 @@ export class Agent {
       return;
     }
 
+    if (trimmed === '/progress' || trimmed === '/still') {
+      if (!this.processing || !this.currentMessage) {
+        await channel.send('No active foreground task.', msg.channelId);
+        return;
+      }
+      const elapsedSec = Math.round((Date.now() - this.currentMessage.timestamp) / 1000);
+      const stepInfo = this.completedStepCount > 0 ? ` · step ${this.completedStepCount}/${MAX_STEPS}` : '';
+      const narrative = formatNarrative(this.stepNarrative, this.currentActivity, 10);
+      const narrativeBlock = narrative ? `\n${narrative}` : '';
+      await channel.send(
+        `⏳ Task in progress (${elapsedSec}s${stepInfo})${narrativeBlock}\nUse /bg current to move it to background.`,
+        msg.channelId,
+      );
+      return;
+    }
+
     if (trimmed === '/help') {
-      await channel.send('Agent is busy. Available: /agents, /halt, /stop, /spotify, /code, /memory, /bg', msg.channelId);
+      await channel.send('Agent is busy. Available: /agents, /halt, /stop, /progress, /spotify, /code, /memory, /bg', msg.channelId);
       return;
     }
 
@@ -462,7 +459,8 @@ export class Agent {
       const agentList = activeAgents.map(a => `**${a.id}**: ${a.task.slice(0, 40)}`).join(', ');
       await channel.send(`I'm busy working on sub-agent tasks (${agentList}). Your message has been queued — I'll respond once I'm free. Use /agents to check status.`, msg.channelId);
     } else {
-      await channel.send("I'm busy processing. Use /bg current to move this task to the background, or wait for it to finish.", msg.channelId);
+      const elapsedSec = this.currentMessage ? Math.round((Date.now() - this.currentMessage.timestamp) / 1000) : 0;
+      await channel.send(`I'm busy processing${elapsedSec > 0 ? ` (${elapsedSec}s elapsed)` : ''}. Use /progress for live status or /bg current to move this task to the background.`, msg.channelId);
     }
 
     this.messageQueue.push(msg);
@@ -512,7 +510,7 @@ export class Agent {
   }
 
   private async handleBgCommand(trimmed: string, msg: ChannelMessage, channel: any): Promise<void> {
-    const parts = trimmed.split(/\s+/);
+    const parts = trimmed.trim().split(/\s+/);
     const sub = parts.length > 1 ? parts[1] : '';
     const args = parts.slice(1).join(' ');
 
@@ -569,17 +567,28 @@ export class Agent {
       return;
     }
 
-    if (sub === 'cancel') {
+    if (sub === 'cancel' || sub === 'stop' || sub === 'kill') {
       const taskId = parts[2];
       if (!taskId) {
-        await channel.send('Usage: /bg cancel <id>', msg.channelId);
+        await channel.send(`Usage: /bg ${sub} <id>`, msg.channelId);
         return;
       }
       const cancelled = this.backgroundTasks.cancel(taskId);
       if (cancelled) {
-        await channel.send(`⛔ Cancelled background task ${taskId}.`, msg.channelId);
+        await channel.send(`⛔ Stopped background task ${taskId}.`, msg.channelId);
       } else {
-        await channel.send(`Task ${taskId} not found or not running.`, msg.channelId);
+        await channel.send(`Task "${taskId}" not found or not running.`, msg.channelId);
+      }
+      this.syncBgTasksToTui();
+      return;
+    }
+
+    if (sub === 'killall' || sub === 'stopall') {
+      const count = this.backgroundTasks.cancelAll();
+      if (count === 0) {
+        await channel.send('No running background tasks to stop.', msg.channelId);
+      } else {
+        await channel.send(`⛔ Stopped ${count} background task${count === 1 ? '' : 's'}.`, msg.channelId);
       }
       this.syncBgTasksToTui();
       return;
@@ -601,22 +610,6 @@ export class Agent {
     }
 
     const colonIdx = trimmed.indexOf(':');
-    if (sub.startsWith('cancel')) {
-      const taskId2 = parts[2];
-      if (!taskId2) {
-        await channel.send('Usage: /bg cancel <id>', msg.channelId);
-        return;
-      }
-      const cancelled = this.backgroundTasks.cancel(taskId2);
-      if (cancelled) {
-        await channel.send(`⛔ Cancelled background task ${taskId2}.`, msg.channelId);
-      } else {
-        await channel.send(`Task ${taskId2} not found or not running.`, msg.channelId);
-      }
-      this.syncBgTasksToTui();
-      return;
-    }
-
     if (colonIdx !== -1 && trimmed[colonIdx + 1] === ' ') {
       const taskDescription = trimmed.slice(colonIdx + 1).trim();
       if (!taskDescription) {
@@ -643,7 +636,7 @@ export class Agent {
 
     const command = args || '';
     if (!command) {
-      await channel.send('Usage:\n• /bg <command> — run a shell command in the background\n• /bg: <task> — delegate an LLM task to the background\n• /bg current — move the active task to the background\n• /bg list — show all background tasks\n• /bg <id> — show task details\n• /bg cancel <id> — cancel a running task\n• /bg clear — prune completed tasks', msg.channelId);
+      await channel.send('Usage:\n• /bg <command> — run a shell command in the background\n• /bg: <task> — delegate an LLM task to the background\n• /bg current — move the active task to the background\n• /bg list — show all background tasks\n• /bg <id> — show task details\n• /bg stop <id> — stop a running task\n• /bg killall — stop all running tasks\n• /bg clear — prune completed tasks', msg.channelId);
       return;
     }
 
@@ -658,6 +651,82 @@ export class Agent {
     if (cliChannel && cliChannel instanceof CLIChannel) {
       (cliChannel as CLIChannel).updateBackgroundTasks(this.backgroundTasks.getAllSummaries());
     }
+  }
+
+  private markProgress(activity?: string): void {
+    this.lastProgressAt = Date.now();
+    if (activity) {
+      this.currentActivity = activity;
+    }
+  }
+
+  private withProgressStream(content: AsyncIterable<string>): AsyncIterable<string> {
+    const self = this;
+    return (async function* () {
+      for await (const chunk of content) {
+        self.markProgress('Streaming response...');
+        yield chunk;
+      }
+    })();
+  }
+
+  private startForegroundHeartbeat(msg: ChannelMessage): () => void {
+    if (msg.channelType === 'internal') return () => {};
+
+    let heartbeatCount = 0;
+    let currentIntervalMs = HEARTBEAT_INITIAL_MS;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = () => {
+      if (!this.processing || !this.currentMessage || this.currentMessage.id !== msg.id) return;
+      const channel = this.channels.getChannelForMessage(msg);
+      if (!channel) return;
+
+      const elapsedMs = Date.now() - this.currentMessage.timestamp;
+      const stallMs = Date.now() - this.lastProgressAt;
+      const elapsedSec = Math.round(elapsedMs / 1000);
+      const stallSec = Math.round(stallMs / 1000);
+
+      if (stallMs >= MAX_STALL_MS && this.currentAbort && !this.currentAbort.signal.aborted) {
+        logger.warn({ elapsedSec, stallSec, msgId: msg.id }, 'Foreground task stalled — aborting');
+        this.currentAbort.abort();
+        void channel.send(
+          `⚠ Task stalled (no progress for ${stallSec}s). Stopped to avoid hanging. You can retry or use /bg current sooner for long tasks.`,
+          msg.channelId,
+        ).catch(() => {});
+        return;
+      }
+
+      heartbeatCount++;
+      const handoffHint = elapsedMs >= LONG_TASK_HANDOFF_SUGGEST_MS
+        ? '\nUse /bg current to move to background.'
+        : '';
+      const stepInfo = this.completedStepCount > 0
+        ? ` · step ${this.completedStepCount}/${MAX_STEPS}`
+        : '';
+      const narrative = formatNarrative(this.stepNarrative, this.currentActivity, 3);
+      const narrativeBlock = narrative ? `\n${narrative}` : '';
+      void channel.send(
+        `⏳ Working... ${elapsedSec}s elapsed${stepInfo}.${narrativeBlock}${handoffHint}`,
+        msg.channelId,
+      ).catch(() => {});
+
+      // Escalate: 20s → 30s → 45s → 60s (cap)
+      if (heartbeatCount <= 2) {
+        currentIntervalMs = 30000;
+      } else if (heartbeatCount <= 4) {
+        currentIntervalMs = 45000;
+      } else {
+        currentIntervalMs = HEARTBEAT_MAX_MS;
+      }
+      timer = setTimeout(tick, currentIntervalMs);
+    };
+
+    timer = setTimeout(tick, HEARTBEAT_INITIAL_MS);
+
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
   }
 
   private notifyBackgroundTaskComplete(task: import('./background-tasks.js').BackgroundTask): void {
@@ -714,14 +783,14 @@ export class Agent {
     this.processing = false;
   }
 
-  private switchSessionProvider(providerName: string): { ok: boolean; message: string } {
+  private async switchSessionProvider(providerName: string): Promise<{ ok: boolean; message: string }> {
     const active = getActiveProviders(this.config).map((p) => p.name);
     if (!active.includes(providerName)) {
       return { ok: false, message: `Provider \`${providerName}\` is not configured. Run \`mercury doctor\` to add/configure models.` };
     }
 
     this.config.providers.default = providerName as any;
-    this.providers = new ProviderRegistryImpl(this.config);
+    this.providers = await ProviderRegistryImpl.create(this.config);
     const selected = this.providers.getDefault();
     const model = selected.getModel();
 
@@ -763,6 +832,12 @@ export class Agent {
   private async handleMessage(msg: ChannelMessage): Promise<void> {
     this.lifecycle.transition('thinking');
     const startTime = Date.now();
+    this.currentActivity = '';
+    this.completedStepCount = 0;
+    this.stepNarrative = [];
+    const stopHeartbeat = this.startForegroundHeartbeat(msg);
+    this.markProgress('Starting...');
+    let wallTimeout: ReturnType<typeof setTimeout> | null = null;
 
     if (this.supervisor && msg.channelType !== 'internal') {
       const activeAgents = this.supervisor.getActiveAgents();
@@ -941,6 +1016,7 @@ export class Agent {
       const channel = this.channels.getChannelForMessage(msg);
       if (channel) {
         await channel.typing(msg.channelId).catch(() => {});
+        this.markProgress();
       }
 
       this.capabilities.setChannelContext(msg.channelId, msg.channelType);
@@ -954,19 +1030,27 @@ export class Agent {
       const loopDetector = new ToolCallLoopDetector();
       const loopAbortController = new AbortController();
       let loopWarningSent = false;
+      let selfCheckCount = 0;
 
       this.currentMessage = msg;
       this.currentAbort = loopAbortController;
+      wallTimeout = setTimeout(() => {
+        if (!loopAbortController.signal.aborted) {
+          loopAbortController.abort();
+        }
+      }, MAX_FOREGROUND_WALL_MS);
 
       const canStream = msg.channelType === 'cli' || (msg.channelType === 'telegram' && this.telegramStreaming);
 
       const tgChannel = this.channels.get('telegram');
       if (msg.channelType === 'telegram' && tgChannel) {
         (tgChannel as TelegramChannel).resetStepCounter(msg.channelId);
+        (tgChannel as TelegramChannel).beginTask(msg.channelId);
       }
 
       for (const provider of fallbackIterator) {
         try {
+          this.markProgress(`Calling ${provider.name}...`);
           const deepseekProviderOptions = provider instanceof DeepSeekProvider && provider.isReasoner
             ? { deepseek: { thinking: { type: 'enabled' as const } } }
             : undefined;
@@ -978,12 +1062,22 @@ export class Agent {
               model: provider.getModelInstance(),
               system: systemPrompt,
               messages,
-              tools: this.capabilities.getTools(),
+              tools: this.programmingMode.isPlan() ? this.capabilities.getPlanTools() : this.capabilities.getTools(),
               maxOutputTokens: MAX_RESPONSE_TOKENS,
               stopWhen: stepCountIs(MAX_STEPS),
               abortSignal: loopAbortController.signal,
               ...(deepseekProviderOptions ? { providerOptions: deepseekProviderOptions } : {}),
               onStepFinish: async ({ toolCalls, toolResults }) => {
+                this.completedStepCount++;
+                if (toolCalls && toolCalls.length > 0) {
+                  for (const tc of toolCalls as any[]) {
+                    this.stepNarrative.push({ tool: tc.toolName, label: formatToolStep(tc.toolName, tc.input as Record<string, any> || {}) });
+                  }
+                  const labels = toolCalls.map((tc: any) => formatToolStep(tc.toolName, tc.input as Record<string, any> || {}));
+                  this.markProgress(labels.join(' → '));
+                } else {
+                  this.markProgress('Thinking...');
+                }
                 if (toolCalls && toolResults && toolCalls.length > 0) {
                   const names = toolCalls.map((tc: any) => tc.toolName).join(', ');
                   logger.info({ tools: names }, 'Tool call step');
@@ -1016,7 +1110,7 @@ export class Agent {
                     logger.warn({ tool: hardLoop.tool, count: hardLoop.count }, 'Hard loop detected — aborting');
                     if (!loopWarningSent && channel && msg.channelType !== 'internal') {
                       loopWarningSent = true;
-                      await channel.send(`⚠ Repeated call detected — ${hardLoop.tool} called ${hardLoop.count}x with same params. Stopping.`, msg.channelId).catch(() => {});
+                      await channel.send(`☿ **Mercury Autopilot** · Identical call loop — ${hardLoop.tool} called ${hardLoop.count}x with same params. Stopping this path.`, msg.channelId).catch(() => {});
                     }
                     loopAbortController.abort();
                     return;
@@ -1026,27 +1120,79 @@ export class Agent {
                     logger.warn({ tool: similarLoop.tool, count: similarLoop.count }, 'Failing loop detected — aborting');
                     if (!loopWarningSent && channel && msg.channelType !== 'internal') {
                       loopWarningSent = true;
-                      await channel.send(`⚠ Failing loop detected — ${similarLoop.tool} called ${similarLoop.count}x, all failing. Stopping.`, msg.channelId).catch(() => {});
+                      await channel.send(`☿ **Mercury Autopilot** · Failing loop — ${similarLoop.tool} called ${similarLoop.count}x, all failing. Stopping this path.`, msg.channelId).catch(() => {});
                     }
                     loopAbortController.abort();
                     return;
                   }
-                  const softLoop = loopDetector.detectSameTool();
-                  if (softLoop && !loopWarningSent && channel && msg.channelType !== 'internal') {
-                    if (this.capabilities.permissions.isAutoApproveAll()) {
-                      loopDetector.reset();
-                      loopWarningSent = false;
-                    } else {
-                      loopWarningSent = true;
-                      const shouldContinue = await channel.askToContinue(
-                        `${softLoop.tool} has been called ${softLoop.count}x in a row. This might be a loop.`,
-                        msg.channelId,
-                      ).catch(() => false);
-                      if (shouldContinue) {
+                  // ── Mercury Autopilot: intelligent repetition analysis ──
+                  const analysis = loopDetector.analyzeRepetition();
+                  if (analysis && !loopWarningSent && channel && msg.channelType !== 'internal') {
+                    if (analysis.verdict === 'productive') {
+                      // Productive iteration — diverse params, high success rate
+                      // Let it run, just log for transparency
+                      logger.info({
+                        tool: analysis.tool,
+                        count: analysis.count,
+                        diversity: analysis.paramDiversity.toFixed(2),
+                        successRate: analysis.successRate.toFixed(2),
+                      }, 'Mercury Autopilot: productive iteration detected — continuing');
+                    } else if (analysis.verdict === 'suspicious') {
+                      // Suspicious but not definitively stuck — observe further
+                      if (this.capabilities.permissions.isAutoApproveAll()) {
+                        selfCheckCount++;
+                        if (selfCheckCount >= MAX_SELF_CHECKS) {
+                          // Escalate: ask AI for final verdict
+                          const recentCalls = loopDetector.getRecentCallSummaries();
+                          const shouldContinue = await this.aiSelfCheck({
+                            toolName: analysis.tool,
+                            callCount: analysis.count,
+                            recentCalls,
+                            taskDescription: msg.content.slice(0, 300),
+                          });
+                          if (!shouldContinue) {
+                            logger.warn({ tool: analysis.tool, count: analysis.count }, 'Mercury Autopilot: AI verdict — unproductive, aborting');
+                            await channel.send(`☿ **Mercury Autopilot** · ${analysis.tool} repeated ${analysis.count}x with low progress (${Math.round(analysis.paramDiversity * 100)}% diversity, ${Math.round(analysis.successRate * 100)}% success). Stopping this path.`, msg.channelId).catch(() => {});
+                            loopAbortController.abort();
+                            return;
+                          }
+                        }
+                        // Not yet at check limit — let it continue with a note
                         loopDetector.reset();
                         loopWarningSent = false;
+                        await channel.send(`☿ **Mercury Autopilot** · Observing ${analysis.tool} (${analysis.count} calls, ${Math.round(analysis.paramDiversity * 100)}% diversity). Continuing under monitoring.`, msg.channelId).catch(() => {});
                       } else {
+                        loopWarningSent = true;
+                        const shouldContinue = await channel.askToContinue(
+                          `☿ Mercury Autopilot: ${analysis.tool} called ${analysis.count}x (${Math.round(analysis.paramDiversity * 100)}% param diversity, ${Math.round(analysis.successRate * 100)}% success rate). Continue?`,
+                          msg.channelId,
+                        ).catch(() => false);
+                        if (shouldContinue) {
+                          loopDetector.reset();
+                          loopWarningSent = false;
+                        } else {
+                          loopAbortController.abort();
+                        }
+                      }
+                    } else {
+                      // verdict === 'stuck'
+                      if (this.capabilities.permissions.isAutoApproveAll()) {
+                        logger.warn({ tool: analysis.tool, count: analysis.count, diversity: analysis.paramDiversity, successRate: analysis.successRate }, 'Mercury Autopilot: stuck loop detected');
+                        await channel.send(`☿ **Mercury Autopilot** · ${analysis.tool} is stuck (${analysis.count} calls, ${Math.round(analysis.paramDiversity * 100)}% diversity, ${Math.round(analysis.successRate * 100)}% success). Stopping this path.`, msg.channelId).catch(() => {});
                         loopAbortController.abort();
+                        return;
+                      } else {
+                        loopWarningSent = true;
+                        const shouldContinue = await channel.askToContinue(
+                          `☿ Mercury Autopilot: ${analysis.tool} appears stuck (${analysis.count} calls, ${Math.round(analysis.successRate * 100)}% success). Continue anyway?`,
+                          msg.channelId,
+                        ).catch(() => false);
+                        if (shouldContinue) {
+                          loopDetector.reset();
+                          loopWarningSent = false;
+                        } else {
+                          loopAbortController.abort();
+                        }
                       }
                     }
                   }
@@ -1081,6 +1227,7 @@ export class Agent {
                     } else {
                       await channel.send(`  [Using: ${names}]`, msg.channelId).catch(() => {});
                     }
+                    this.markProgress();
                   }
                 } else if (toolResults === undefined || (toolCalls === undefined)) {
                   const stepText = (toolResults as any)?.text ?? '';
@@ -1119,15 +1266,15 @@ export class Agent {
                   ? Number(msg.channelId.split(':')[1])
                   : Number(msg.channelId);
                 if (!isNaN(chatId)) {
-                  fullText = await (tgChannel as any).sendStreamToChat(chatId, streamResult.textStream);
+                  fullText = await (tgChannel as any).sendStreamToChat(chatId, this.withProgressStream(streamResult.textStream));
                 } else {
-                  fullText = await channel.stream(streamResult.textStream, msg.channelId);
+                  fullText = await channel.stream(this.withProgressStream(streamResult.textStream), msg.channelId);
                 }
               } else {
-                fullText = await channel.stream(streamResult.textStream, msg.channelId);
+                fullText = await channel.stream(this.withProgressStream(streamResult.textStream), msg.channelId);
               }
             } else {
-              fullText = await channel.stream(streamResult.textStream, msg.channelId);
+              fullText = await channel.stream(this.withProgressStream(streamResult.textStream), msg.channelId);
             }
 
             const [usage] = await Promise.all([
@@ -1144,12 +1291,22 @@ export class Agent {
               model: provider.getModelInstance(),
               system: systemPrompt,
               messages,
-              tools: this.capabilities.getTools(),
+              tools: this.programmingMode.isPlan() ? this.capabilities.getPlanTools() : this.capabilities.getTools(),
               maxOutputTokens: MAX_RESPONSE_TOKENS,
               stopWhen: stepCountIs(MAX_STEPS),
               abortSignal: loopAbortController.signal,
               ...(deepseekProviderOptions ? { providerOptions: deepseekProviderOptions } : {}),
               onStepFinish: async ({ toolCalls, toolResults }) => {
+                this.completedStepCount++;
+                if (toolCalls && toolCalls.length > 0) {
+                  for (const tc of toolCalls as any[]) {
+                    this.stepNarrative.push({ tool: tc.toolName, label: formatToolStep(tc.toolName, tc.input as Record<string, any> || {}) });
+                  }
+                  const labels = toolCalls.map((tc: any) => formatToolStep(tc.toolName, tc.input as Record<string, any> || {}));
+                  this.markProgress(labels.join(' → '));
+                } else {
+                  this.markProgress('Thinking...');
+                }
                 if (toolCalls && toolResults && toolCalls.length > 0) {
                   const names = toolCalls.map((tc: any) => tc.toolName).join(', ');
                   logger.info({ tools: names }, 'Tool call step');
@@ -1182,7 +1339,7 @@ export class Agent {
                     logger.warn({ tool: hardLoop.tool, count: hardLoop.count }, 'Hard loop detected — aborting');
                     if (!loopWarningSent && channel && msg.channelType !== 'internal') {
                       loopWarningSent = true;
-                      await channel.send(`⚠ Repeated call detected — ${hardLoop.tool} called ${hardLoop.count}x with same params. Stopping.`, msg.channelId).catch(() => {});
+                      await channel.send(`☿ **Mercury Autopilot** · Identical call loop — ${hardLoop.tool} called ${hardLoop.count}x with same params. Stopping this path.`, msg.channelId).catch(() => {});
                     }
                     loopAbortController.abort();
                     return;
@@ -1192,27 +1349,79 @@ export class Agent {
                     logger.warn({ tool: similarLoop.tool, count: similarLoop.count }, 'Failing loop detected — aborting');
                     if (!loopWarningSent && channel && msg.channelType !== 'internal') {
                       loopWarningSent = true;
-                      await channel.send(`⚠ Failing loop detected — ${similarLoop.tool} called ${similarLoop.count}x, all failing. Stopping.`, msg.channelId).catch(() => {});
+                      await channel.send(`☿ **Mercury Autopilot** · Failing loop — ${similarLoop.tool} called ${similarLoop.count}x, all failing. Stopping this path.`, msg.channelId).catch(() => {});
                     }
                     loopAbortController.abort();
                     return;
                   }
-                  const softLoop = loopDetector.detectSameTool();
-                  if (softLoop && !loopWarningSent && channel && msg.channelType !== 'internal') {
-                    if (this.capabilities.permissions.isAutoApproveAll()) {
-                      loopDetector.reset();
-                      loopWarningSent = false;
-                    } else {
-                      loopWarningSent = true;
-                      const shouldContinue = await channel.askToContinue(
-                        `${softLoop.tool} has been called ${softLoop.count}x in a row. This might be a loop.`,
-                        msg.channelId,
-                      ).catch(() => false);
-                      if (shouldContinue) {
+                  // ── Mercury Autopilot: intelligent repetition analysis ──
+                  const analysis = loopDetector.analyzeRepetition();
+                  if (analysis && !loopWarningSent && channel && msg.channelType !== 'internal') {
+                    if (analysis.verdict === 'productive') {
+                      // Productive iteration — diverse params, high success rate
+                      // Let it run, just log for transparency
+                      logger.info({
+                        tool: analysis.tool,
+                        count: analysis.count,
+                        diversity: analysis.paramDiversity.toFixed(2),
+                        successRate: analysis.successRate.toFixed(2),
+                      }, 'Mercury Autopilot: productive iteration detected — continuing');
+                    } else if (analysis.verdict === 'suspicious') {
+                      // Suspicious but not definitively stuck — observe further
+                      if (this.capabilities.permissions.isAutoApproveAll()) {
+                        selfCheckCount++;
+                        if (selfCheckCount >= MAX_SELF_CHECKS) {
+                          // Escalate: ask AI for final verdict
+                          const recentCalls = loopDetector.getRecentCallSummaries();
+                          const shouldContinue = await this.aiSelfCheck({
+                            toolName: analysis.tool,
+                            callCount: analysis.count,
+                            recentCalls,
+                            taskDescription: msg.content.slice(0, 300),
+                          });
+                          if (!shouldContinue) {
+                            logger.warn({ tool: analysis.tool, count: analysis.count }, 'Mercury Autopilot: AI verdict — unproductive, aborting');
+                            await channel.send(`☿ **Mercury Autopilot** · ${analysis.tool} repeated ${analysis.count}x with low progress (${Math.round(analysis.paramDiversity * 100)}% diversity, ${Math.round(analysis.successRate * 100)}% success). Stopping this path.`, msg.channelId).catch(() => {});
+                            loopAbortController.abort();
+                            return;
+                          }
+                        }
+                        // Not yet at check limit — let it continue with a note
                         loopDetector.reset();
                         loopWarningSent = false;
+                        await channel.send(`☿ **Mercury Autopilot** · Observing ${analysis.tool} (${analysis.count} calls, ${Math.round(analysis.paramDiversity * 100)}% diversity). Continuing under monitoring.`, msg.channelId).catch(() => {});
                       } else {
+                        loopWarningSent = true;
+                        const shouldContinue = await channel.askToContinue(
+                          `☿ Mercury Autopilot: ${analysis.tool} called ${analysis.count}x (${Math.round(analysis.paramDiversity * 100)}% param diversity, ${Math.round(analysis.successRate * 100)}% success rate). Continue?`,
+                          msg.channelId,
+                        ).catch(() => false);
+                        if (shouldContinue) {
+                          loopDetector.reset();
+                          loopWarningSent = false;
+                        } else {
+                          loopAbortController.abort();
+                        }
+                      }
+                    } else {
+                      // verdict === 'stuck'
+                      if (this.capabilities.permissions.isAutoApproveAll()) {
+                        logger.warn({ tool: analysis.tool, count: analysis.count, diversity: analysis.paramDiversity, successRate: analysis.successRate }, 'Mercury Autopilot: stuck loop detected');
+                        await channel.send(`☿ **Mercury Autopilot** · ${analysis.tool} is stuck (${analysis.count} calls, ${Math.round(analysis.paramDiversity * 100)}% diversity, ${Math.round(analysis.successRate * 100)}% success). Stopping this path.`, msg.channelId).catch(() => {});
                         loopAbortController.abort();
+                        return;
+                      } else {
+                        loopWarningSent = true;
+                        const shouldContinue = await channel.askToContinue(
+                          `☿ Mercury Autopilot: ${analysis.tool} appears stuck (${analysis.count} calls, ${Math.round(analysis.successRate * 100)}% success). Continue anyway?`,
+                          msg.channelId,
+                        ).catch(() => false);
+                        if (shouldContinue) {
+                          loopDetector.reset();
+                          loopWarningSent = false;
+                        } else {
+                          loopAbortController.abort();
+                        }
                       }
                     }
                   }
@@ -1247,6 +1456,7 @@ export class Agent {
                     } else {
                       await channel.send(`  [Using: ${names}]`, msg.channelId).catch(() => {});
                     }
+                    this.markProgress();
                   }
                 } else if (toolResults === undefined || (toolCalls === undefined)) {
                   const stepText = (toolResults as any)?.text ?? '';
@@ -1287,7 +1497,14 @@ export class Agent {
               result = { text: streamedText, usage: undefined };
             }
             if (!result) {
-              result = { text: 'I stopped because I detected I was stuck in a loop (repeating the same action without progress). I cannot complete this task as requested. Please let me know if you\'d like me to try a completely different approach, or if there\'s something else I can help with.', usage: undefined };
+              const elapsedMs = Date.now() - startTime;
+              const timedOut = elapsedMs >= MAX_FOREGROUND_WALL_MS;
+              result = {
+                text: timedOut
+                  ? 'I stopped because this request exceeded the foreground time limit. Please retry with a narrower scope, or move it to background with /bg current sooner.'
+                  : 'I stopped because I detected I was stuck in a loop (repeating the same action without progress). I cannot complete this task as requested. Please let me know if you\'d like me to try a completely different approach, or if there\'s something else I can help with.',
+                usage: undefined,
+              };
             }
             if (usedProvider) {
               this.providers.markSuccess(usedProvider.name);
@@ -1306,6 +1523,11 @@ export class Agent {
         const errMsg = `All LLM providers failed. Last error: ${lastError?.message || 'unknown'}`;
         logger.error({ err: lastError }, errMsg);
         if (channel && msg.channelType !== 'internal') {
+          // End task before sending error so it goes through as a normal message
+          if (channel instanceof TelegramChannel) {
+            (channel as TelegramChannel).endTask(msg.channelId);
+            (channel as TelegramChannel).resetStepCounter(msg.channelId);
+          }
           await channel.send(errMsg, msg.channelId);
         }
         this.lifecycle.transition('idle');
@@ -1313,6 +1535,13 @@ export class Agent {
       }
 
       const finalText = (streamedText || result.text || '').trim() || '(no text response)';
+      this.markProgress('Finalizing response...');
+
+      // Store plan output when in plan mode for later execution
+      if (this.programmingMode.isPlan() && finalText !== '(no text response)') {
+        this.programmingMode.storePlan(finalText);
+        logger.info({ planLength: finalText.length }, 'Plan captured from plan-mode response');
+      }
 
       this.tokenBudget.recordUsage({
         provider: usedProvider!.name,
@@ -1353,11 +1582,64 @@ export class Agent {
 
       if (channel && msg.channelType !== 'internal') {
         const elapsed = Date.now() - startTime;
-        if (streamedText && streamedText.trim()) {
-          logger.info({ channelType: msg.channelType, elapsed }, 'Streamed response completed');
+        const stepCount = this.completedStepCount;
+
+        // Send completion banner only for substantial tasks (3+ steps AND >30s)
+        // Simple responses (greetings, quick answers) don't need a banner
+        const isSubstantialTask = stepCount >= 3 && elapsed >= 30_000;
+        if (isSubstantialTask && channel instanceof TelegramChannel) {
+          // For substantial Telegram tasks: sendCompletion handles endTask + deferred flush + cleanup
+          const completionMeta = {
+            provider: usedProvider?.name ?? 'unknown',
+            model: usedProvider?.model ?? 'unknown',
+            inputTokens: result.usage?.inputTokens ?? 0,
+            outputTokens: result.usage?.outputTokens ?? 0,
+            totalTokens: (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0),
+            budgetUsed: this.tokenBudget.getDailyUsed(),
+            budgetTotal: this.tokenBudget.getBudget(),
+            budgetPercentage: this.tokenBudget.getUsagePercentage(),
+          };
+          // If there's a non-streamed response that wasn't deferred, defer it now
+          if (!streamedText && finalText && finalText.trim()) {
+            // send() during active task already deferred it — nothing to do
+          }
+          await (channel as TelegramChannel).sendCompletion(elapsed, stepCount, msg.channelId, completionMeta);
+        } else if (channel instanceof TelegramChannel) {
+          // For non-substantial Telegram tasks: end task, flush deferred, clean up
+          (channel as TelegramChannel).endTask(msg.channelId);
+          // Flush deferred response
+          const deferred = (channel as TelegramChannel).popDeferredResponse(msg.channelId);
+          const responseText = deferred || (!streamedText && finalText ? finalText : null);
+          if (responseText && responseText.trim()) {
+            await channel.send(responseText, msg.channelId, elapsed);
+          }
+          if (stepCount > 0) {
+            await (channel as TelegramChannel).cleanupEphemeralMessages(msg.channelId);
+            (channel as TelegramChannel).resetStepCounter(msg.channelId);
+          }
+          this.markProgress();
         } else {
-          logger.info({ channelType: msg.channelType, targetId: msg.channelId }, 'Sending response');
-          await channel.send(finalText, msg.channelId, elapsed);
+          // CLI or other channels — original flow
+          if (streamedText && streamedText.trim()) {
+            logger.info({ channelType: msg.channelType, elapsed }, 'Streamed response completed');
+          } else {
+            logger.info({ channelType: msg.channelType, targetId: msg.channelId }, 'Sending response');
+            await channel.send(finalText, msg.channelId, elapsed);
+            this.markProgress();
+          }
+          if (isSubstantialTask && channel instanceof CLIChannel) {
+            const completionMeta = {
+              provider: usedProvider?.name ?? 'unknown',
+              model: usedProvider?.model ?? 'unknown',
+              inputTokens: result.usage?.inputTokens ?? 0,
+              outputTokens: result.usage?.outputTokens ?? 0,
+              totalTokens: (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0),
+              budgetUsed: this.tokenBudget.getDailyUsed(),
+              budgetTotal: this.tokenBudget.getBudget(),
+              budgetPercentage: this.tokenBudget.getUsagePercentage(),
+            };
+            (channel as CLIChannel).sendCompletion(elapsed, stepCount, completionMeta);
+          }
         }
       } else {
         logger.debug('Internal prompt processed, no channel response needed');
@@ -1368,8 +1650,13 @@ export class Agent {
       logger.error({ err }, 'Error handling message');
       this.lifecycle.transition('idle');
     } finally {
+      if (wallTimeout) clearTimeout(wallTimeout);
+      stopHeartbeat();
       this.currentMessage = null;
       this.currentAbort = null;
+      this.currentActivity = '';
+      this.completedStepCount = 0;
+      this.stepNarrative = [];
       if (isInternal || isScheduled) {
         this.capabilities.permissions.setAutoApproveAll(false);
       }
@@ -1393,7 +1680,18 @@ export class Agent {
       prompt += '\nBe concise to conserve tokens.';
     }
 
-    prompt += `\n\nEnvironment:\n- Platform: ${process.platform}\n- Working directory: ${this.capabilities.getCwd()}`;
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    prompt += `\n\nEnvironment:\n- Date: ${dateStr}, ${timeStr} (${timezone})\n- Platform: ${process.platform}\n- Working directory: ${this.capabilities.getCwd()}`;
+
+    prompt += `\n\n**Tool Usage Guidelines:**
+- Use write_file, create_file, and edit_file tools DIRECTLY to create and modify files. Do NOT create intermediary scripts (Python, bash, Node.js) whose sole purpose is to generate other files — you have native file tools for this.
+- Use run_command for: building, testing, installing dependencies, running the project, git operations, and other system tasks that require a shell.
+- Do NOT use run_command with echo/cat/tee/heredoc to write files. Use write_file or create_file instead.
+- Do NOT create one-time-use helper scripts. If the user asks you to create a file, create it directly with create_file or write_file.
+- When creating multiple files, call create_file or write_file for each one individually. Do not batch them into a script.`;
 
     if (this.userMemory) {
       const summary = this.userMemory.getSummary();
@@ -1630,6 +1928,68 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
     logger.info('Mercury has shut down');
   }
 
+  /**
+   * AI self-check: ask the model itself whether repeated tool usage is productive or a loop.
+   * Used in allow-all mode instead of prompting the user.
+   * Returns true if the AI thinks it should continue, false if it should stop.
+   */
+  private async aiSelfCheck(context: {
+    toolName: string;
+    callCount: number;
+    recentCalls: string[];
+    taskDescription: string;
+  }): Promise<boolean> {
+    try {
+      const provider = this.providers.getDefault();
+      if (!provider) return true; // no provider = let it continue
+
+      const selfCheckResult = await generateText({
+        model: provider.getModelInstance(),
+        system: `You are Mercury Autopilot, a monitoring system inside an AI coding agent. Your job is to determine whether repeated tool usage is productive iteration or a stuck loop.
+
+Productive patterns (CONTINUE):
+- Fetching multiple different URLs (e.g., scraping articles, reading docs)
+- Reading multiple different files to understand a codebase
+- Editing different sections of code across files
+- Running different commands (build, test, lint, deploy)
+- Creating multiple files for a project
+
+Stuck patterns (STOP):
+- Same exact call repeated with identical parameters
+- Retrying the same failing operation with minor variations
+- Reading the same file over and over
+- Running the same failing command repeatedly
+
+Respond with ONLY "CONTINUE" or "STOP" followed by a one-line reason.`,
+        messages: [{
+          role: 'user',
+          content: `Tool "${context.toolName}" called ${context.callCount} times consecutively.
+
+User's task: ${context.taskDescription}
+
+Recent calls (newest last):
+${context.recentCalls.join('\n')}
+
+Is this productive iteration or a stuck loop?`,
+        }],
+        maxOutputTokens: 80,
+      });
+
+      const answer = (selfCheckResult.text || '').trim().toUpperCase();
+      const shouldContinue = answer.startsWith('CONTINUE');
+      logger.info({
+        toolName: context.toolName,
+        count: context.callCount,
+        decision: shouldContinue ? 'continue' : 'stop',
+        reason: selfCheckResult.text?.trim().slice(0, 120),
+      }, 'Mercury Autopilot verdict');
+      return shouldContinue;
+    } catch (err) {
+      logger.warn({ err }, 'Mercury Autopilot self-check failed — defaulting to continue');
+      return true; // on failure, be permissive
+    }
+  }
+
   setSpotifyClient(client: SpotifyClient): void {
     this.spotifyClient = client;
   }
@@ -1638,21 +1998,14 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
     const channel = this.channels.get(channelType as any);
 
     if (channelType === 'cli' && channel instanceof CLIChannel) {
-      const options: ArrowSelectOption[] = choices.map((label, i) => ({
+      const options = choices.map((label, i) => ({
         value: String(i),
         label,
       }));
 
-      try {
-        const selected = await channel.withMenu(async (select) => {
-          return select(question, options);
-        });
-        if (selected === undefined) return choices[0];
-        const index = parseInt(selected, 10);
-        return isNaN(index) ? choices[0] : choices[index];
-      } catch {
-        return choices[0];
-      }
+      const selected = await channel.presentChoicePrompt(question, options);
+      const index = parseInt(selected, 10);
+      return isNaN(index) ? choices[0] : (choices[index] ?? choices[0]);
     }
 
     if (channelType === 'telegram' && channel instanceof TelegramChannel) {
@@ -1753,13 +2106,29 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
     if (!ctx) return false;
 
     if (cmd === '/help') {
-      await channel.send(ctx.manual(), channelId);
+      const helpText = channelType === 'telegram' ? getTelegramHelp() : ctx.manual();
+      await channel.send(helpText, channelId);
       return true;
     }
 
     if (cmd.startsWith('/bg')) {
-      const args = trimmed.slice('/bg'.length).trim();
-      await this.handleBgCommand(args, { content: trimmed, channelId, channelType: channelType as any, id: Date.now().toString(36), senderId: 'user', timestamp: Date.now() }, channel);
+      await this.handleBgCommand(trimmed, { content: trimmed, channelId, channelType: channelType as any, id: Date.now().toString(36), senderId: 'user', timestamp: Date.now() }, channel);
+      return true;
+    }
+
+    if (cmd === '/progress' || cmd === '/still') {
+      if (!this.processing || !this.currentMessage) {
+        await channel.send('No active foreground task.', channelId);
+        return true;
+      }
+      const elapsedSec = Math.round((Date.now() - this.currentMessage.timestamp) / 1000);
+      const stepInfo = this.completedStepCount > 0 ? ` · step ${this.completedStepCount}/${MAX_STEPS}` : '';
+      const narrative = formatNarrative(this.stepNarrative, this.currentActivity, 10);
+      const narrativeBlock = narrative ? `\n${narrative}` : '';
+      await channel.send(
+        `⏳ Task in progress (${elapsedSec}s${stepInfo})${narrativeBlock}\nUse /bg current to move it to background.`,
+        channelId,
+      );
       return true;
     }
 
@@ -1836,7 +2205,7 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
           if (picked === 'Keep current model') return true;
           const providerName = picked.split(' · ')[0].trim();
           if (providerName && providerName !== current.name) {
-            const switched = this.switchSessionProvider(providerName);
+            const switched = await this.switchSessionProvider(providerName);
             await channel.send(switched.message, channelId);
           }
         }
@@ -1854,7 +2223,7 @@ Always specify owner and repo parameters on GitHub tools. The user's GitHub user
         return true;
       }
 
-      const switched = this.switchSessionProvider(target);
+      const switched = await this.switchSessionProvider(target);
       await channel.send(switched.message, channelId);
       return true;
     }

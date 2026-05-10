@@ -40,7 +40,22 @@ export class TelegramChannel extends BaseChannel {
   private onPermissionMode?: (mode: PermissionMode, chatId: number) => void;
   private statusMessageIds = new Map<string, number>();
   private stepCounters = new Map<string, number>();
+  private stepHistory = new Map<string, string[]>();
   private statusText = new Map<string, string>();
+  /** Track all ephemeral message IDs (permissions, loops, status) per chat for cleanup */
+  private ephemeralMessageIds = new Map<string, number[]>();
+  /** Track pinned status message per chat (only one at a time) */
+  private pinnedMessageIds = new Map<string, number>();
+  /** Minimum steps before we pin the status card */
+  private static readonly PIN_STEP_THRESHOLD = 3;
+  /** Whether a task is currently active per chat — gates message routing */
+  private taskActive = new Map<string, boolean>();
+  /** Deferred AI responses to send after task completes */
+  private deferredResponses = new Map<string, string>();
+  /** Notices appended to the status card during a task (Autopilot warnings, etc.) */
+  private statusNotices = new Map<string, string[]>();
+  /** Maximum number of notice lines to show in the status card */
+  private static readonly MAX_STATUS_NOTICES = 3;
 
   constructor(private config: MercuryConfig) {
     super();
@@ -48,6 +63,34 @@ export class TelegramChannel extends BaseChannel {
 
   setChatCommandContext(ctx: import('../capabilities/registry.js').ChatCommandContext): void {
     this.chatCommandContext = ctx;
+  }
+
+  /** Mark a task as active — routes send() through the status card */
+  beginTask(targetId?: string): void {
+    const key = targetId || 'notification';
+    this.taskActive.set(key, true);
+    this.deferredResponses.delete(key);
+    this.statusNotices.delete(key);
+  }
+
+  /** Mark task as ended — allows normal send() again */
+  endTask(targetId?: string): void {
+    const key = targetId || 'notification';
+    this.taskActive.set(key, false);
+  }
+
+  /** Check if a task is currently active */
+  isTaskActive(targetId?: string): boolean {
+    const key = targetId || 'notification';
+    return this.taskActive.get(key) ?? false;
+  }
+
+  /** Get and clear deferred response text (to send after task cleanup) */
+  popDeferredResponse(targetId?: string): string | undefined {
+    const key = targetId || 'notification';
+    const text = this.deferredResponses.get(key);
+    this.deferredResponses.delete(key);
+    return text;
   }
 
   setOnPermissionMode(handler: (mode: PermissionMode, chatId: number) => void): void {
@@ -228,20 +271,20 @@ export class TelegramChannel extends BaseChannel {
 
     const commands = [
       { command: 'start', description: 'Request Telegram access to this Mercury instance' },
-      { command: 'pair', description: 'Request Telegram access to this Mercury instance' },
-      { command: 'help', description: 'Show capabilities and commands manual' },
+      { command: 'help', description: 'Show available commands' },
       { command: 'status', description: 'Show agent config, budget, and uptime' },
-      { command: 'tools', description: 'List all loaded tools' },
-      { command: 'skills', description: 'List installed skills' },
-      { command: 'budget', description: 'Show token budget status' },
-      { command: 'budget_override', description: 'Override budget for one request' },
-      { command: 'budget_reset', description: 'Reset token usage to zero' },
-      { command: 'budget_set', description: 'Set new daily token budget' },
+      { command: 'progress', description: 'Live status for the current task' },
+      { command: 'stop', description: 'Stop all agents and clear queue' },
+      { command: 'budget', description: 'Token budget status and management' },
       { command: 'stream', description: 'Toggle text streaming on/off' },
       { command: 'memory', description: 'View and manage second brain memory' },
       { command: 'permissions', description: 'Change permission mode (Ask Me / Allow All)' },
-      { command: 'tasks', description: 'List scheduled tasks' },
-      { command: 'unpair', description: 'Reset all Telegram access for this Mercury instance' },
+      { command: 'models', description: 'List providers or switch AI model' },
+      { command: 'code', description: 'Programming mode (plan / execute / off)' },
+      { command: 'agents', description: 'List and manage sub-agents' },
+      { command: 'bg', description: 'Background tasks (list / cancel / run)' },
+      { command: 'spotify', description: 'Spotify playback controls' },
+      { command: 'unpair', description: 'Reset all Telegram access (admin only)' },
     ];
 
     try {
@@ -262,6 +305,32 @@ export class TelegramChannel extends BaseChannel {
     const chatIds = this.resolveTargetChatIds(targetId);
     if (chatIds.length === 0 || !this.bot) {
       logger.warn({ targetId, chatIds }, 'Telegram send: no valid chat IDs');
+      return;
+    }
+
+    const key = targetId || 'notification';
+
+    // During an active task, route messages through the status card instead of creating new messages
+    if (this.taskActive.get(key)) {
+      const timeSuffix = elapsedMs != null ? ` (${(elapsedMs / 1000).toFixed(1)}s)` : '';
+      const fullContent = content + timeSuffix;
+      if (!fullContent.trim()) return;
+
+      // If this looks like a final AI response (long, not a system notice), defer it
+      const isSystemNotice = content.startsWith('☿ ') || content.startsWith('⚠') || content.startsWith('  [') || content.length < 200;
+      if (isSystemNotice) {
+        // Append as a notice line in the status card
+        const notices = this.statusNotices.get(key) || [];
+        // Truncate long notices to keep status card compact
+        const truncated = fullContent.length > 80 ? fullContent.slice(0, 77) + '…' : fullContent;
+        notices.push(truncated);
+        this.statusNotices.set(key, notices);
+        // Refresh the status card to include the notice
+        await this.refreshStatusCard(targetId);
+      } else {
+        // Defer the full response — will be sent after task completes
+        this.deferredResponses.set(key, fullContent);
+      }
       return;
     }
 
@@ -333,12 +402,20 @@ export class TelegramChannel extends BaseChannel {
     const chatIds = this.resolveTargetChatIds(targetId);
     if (chatIds.length === 0 || !this.bot) return '';
 
-    this.deleteStatusMessage(targetId);
-
     let full = '';
     for await (const chunk of content) {
       full += chunk;
     }
+
+    const key = targetId || 'notification';
+    // During an active task, defer the streamed response
+    if (this.taskActive.get(key)) {
+      this.deferredResponses.set(key, full);
+      return full;
+    }
+
+    this.deleteStatusMessage(targetId);
+
     const html = mdToTelegram(full);
     for (const chatId of chatIds) {
       try {
@@ -352,19 +429,48 @@ export class TelegramChannel extends BaseChannel {
 
   async sendToolFeedback(toolName: string, args: Record<string, any>, targetId?: string): Promise<void> {
     const key = targetId || 'notification';
-    this.stepCounters.set(key, (this.stepCounters.get(key) || 0) + 1);
-    const step = this.stepCounters.get(key)!;
+    const step = (this.stepCounters.get(key) || 0) + 1;
+    this.stepCounters.set(key, step);
     const label = formatToolStep(toolName, args);
-    await this.updateStatusMessage(`**Step ${step}.** ${label}`, targetId);
+
+    // Build a rolling progress view: completed steps + current
+    const history = this.stepHistory.get(key) || [];
+    // Keep last 5 completed steps visible
+    const recentHistory = history.slice(-5);
+    const lines = [
+      `⚙️ **Mercury working** (step ${step})`,
+      '',
+      ...recentHistory.map(h => `✅ ${h}`),
+      `⏳ ${label}…`,
+    ];
+    await this.updateStatusMessage(lines.join('\n'), targetId);
+
+    // Pin the status card once we hit the threshold (substantial task)
+    if (step === TelegramChannel.PIN_STEP_THRESHOLD) {
+      await this.pinStatusMessage(targetId);
+    }
   }
 
   async sendStepDone(toolName: string, result: unknown, targetId?: string): Promise<void> {
     const key = targetId || 'notification';
     const step = this.stepCounters.get(key) || 0;
     const summary = formatToolResult(toolName, result);
-    const current = this.statusText.get(key) || '';
-    const line = summary ? `✓ ${summary}` : '✓ done';
-    await this.updateStatusMessage(`${current}\n${line}`, targetId);
+    const label = formatToolStep(toolName, {} as any);
+    const doneLine = summary ? `${label} · ${summary}` : label;
+
+    // Add to history
+    const history = this.stepHistory.get(key) || [];
+    history.push(doneLine);
+    this.stepHistory.set(key, history);
+
+    // Update progress view
+    const recentHistory = history.slice(-5);
+    const lines = [
+      `⚙️ **Mercury working** (${step} steps done)`,
+      '',
+      ...recentHistory.map(h => `✅ ${h}`),
+    ];
+    await this.updateStatusMessage(lines.join('\n'), targetId);
   }
 
   async typing(targetId?: string): Promise<void> {
@@ -390,6 +496,18 @@ export class TelegramChannel extends BaseChannel {
 
   async sendStreamToChat(chatId: number, textStream: AsyncIterable<string>): Promise<string> {
     if (!this.bot) return '';
+
+    // During an active task, collect the stream and defer it
+    // Check all task-active keys since we have chatId not targetId
+    const activeKey = this.findActiveTaskKey(chatId);
+    if (activeKey) {
+      let full = '';
+      for await (const chunk of textStream) {
+        full += chunk;
+      }
+      this.deferredResponses.set(activeKey, full);
+      return full;
+    }
 
     const STREAM_EDIT_INTERVAL = 1500;
     const STREAM_MIN_LENGTH = 20;
@@ -474,27 +592,41 @@ export class TelegramChannel extends BaseChannel {
       .text('Deny', `${id}:no`);
 
     const html = mdToTelegram(prompt);
+    let sentMsgId: number | undefined;
 
     try {
-      await this.bot.api.sendMessage(chatId, html, {
+      const msg = await this.bot.api.sendMessage(chatId, html, {
         parse_mode: 'HTML',
         reply_markup: keyboard,
       });
+      sentMsgId = msg.message_id;
     } catch {
-      await this.bot.api.sendMessage(chatId, this.stripHtml(html), {
+      const msg = await this.bot.api.sendMessage(chatId, this.stripHtml(html), {
         reply_markup: keyboard,
       });
+      sentMsgId = msg.message_id;
     }
 
+    if (sentMsgId) this.trackEphemeral(targetId, sentMsgId);
+
     return new Promise((resolve) => {
-      this.pendingApprovals.set(`${id}:yes`, () => resolve('yes'));
-      this.pendingApprovals.set(`${id}:always`, () => resolve('always'));
-      this.pendingApprovals.set(`${id}:no`, () => resolve('no'));
+      const cleanup = (result: string) => {
+        this.pendingApprovals.delete(`${id}:yes`);
+        this.pendingApprovals.delete(`${id}:always`);
+        this.pendingApprovals.delete(`${id}:no`);
+        // Delete the permission card immediately
+        if (sentMsgId) this.deleteEphemeralMessage(targetId, sentMsgId);
+        resolve(result);
+      };
+      this.pendingApprovals.set(`${id}:yes`, () => cleanup('yes'));
+      this.pendingApprovals.set(`${id}:always`, () => cleanup('always'));
+      this.pendingApprovals.set(`${id}:no`, () => cleanup('no'));
 
       setTimeout(() => {
         this.pendingApprovals.delete(`${id}:yes`);
         this.pendingApprovals.delete(`${id}:always`);
         this.pendingApprovals.delete(`${id}:no`);
+        if (sentMsgId) this.deleteEphemeralMessage(targetId, sentMsgId);
         resolve('no');
       }, 120_000);
     });
@@ -510,24 +642,36 @@ export class TelegramChannel extends BaseChannel {
       .text('Continue', `${id}:yes`)
       .text('Stop', `${id}:no`);
 
+    let sentMsgId: number | undefined;
     try {
-      await this.bot.api.sendMessage(chatId, mdToTelegram(question), {
+      const msg = await this.bot.api.sendMessage(chatId, mdToTelegram(question), {
         parse_mode: 'HTML',
         reply_markup: keyboard,
       });
+      sentMsgId = msg.message_id;
     } catch {
-      await this.bot.api.sendMessage(chatId, question, {
+      const msg = await this.bot.api.sendMessage(chatId, question, {
         reply_markup: keyboard,
       });
+      sentMsgId = msg.message_id;
     }
 
+    if (sentMsgId) this.trackEphemeral(targetId, sentMsgId);
+
     return new Promise((resolve) => {
-      this.pendingApprovals.set(`${id}:yes`, () => resolve(true));
-      this.pendingApprovals.set(`${id}:no`, () => resolve(false));
+      const cleanup = (result: boolean) => {
+        this.pendingApprovals.delete(`${id}:yes`);
+        this.pendingApprovals.delete(`${id}:no`);
+        if (sentMsgId) this.deleteEphemeralMessage(targetId, sentMsgId);
+        resolve(result);
+      };
+      this.pendingApprovals.set(`${id}:yes`, () => cleanup(true));
+      this.pendingApprovals.set(`${id}:no`, () => cleanup(false));
 
       setTimeout(() => {
         this.pendingApprovals.delete(`${id}:yes`);
         this.pendingApprovals.delete(`${id}:no`);
+        if (sentMsgId) this.deleteEphemeralMessage(targetId, sentMsgId);
         resolve(false);
       }, 120_000);
     });
@@ -545,24 +689,36 @@ export class TelegramChannel extends BaseChannel {
 
     const html = `<b>Permission Mode</b>\nHow should Mercury handle risky actions this session?\n\n🔒 <b>Ask Me</b> — confirm before file writes, commands, and scope changes\n✅ <b>Allow All</b> — auto-approve everything (scopes, commands, loops)`;
 
+    let sentMsgId: number | undefined;
     try {
-      await this.bot.api.sendMessage(chatId, html, {
+      const msg = await this.bot.api.sendMessage(chatId, html, {
         parse_mode: 'HTML',
         reply_markup: keyboard,
       });
+      sentMsgId = msg.message_id;
     } catch {
-      await this.bot.api.sendMessage(chatId, this.stripHtml(html), {
+      const msg = await this.bot.api.sendMessage(chatId, this.stripHtml(html), {
         reply_markup: keyboard,
       });
+      sentMsgId = msg.message_id;
     }
 
+    if (sentMsgId) this.trackEphemeral(targetId, sentMsgId);
+
     return new Promise((resolve) => {
-      this.pendingApprovals.set(`${id}:ask-me`, () => resolve('ask-me'));
-      this.pendingApprovals.set(`${id}:allow-all`, () => resolve('allow-all'));
+      const cleanup = (result: PermissionMode) => {
+        this.pendingApprovals.delete(`${id}:ask-me`);
+        this.pendingApprovals.delete(`${id}:allow-all`);
+        if (sentMsgId) this.deleteEphemeralMessage(targetId, sentMsgId);
+        resolve(result);
+      };
+      this.pendingApprovals.set(`${id}:ask-me`, () => cleanup('ask-me'));
+      this.pendingApprovals.set(`${id}:allow-all`, () => cleanup('allow-all'));
 
       setTimeout(() => {
         this.pendingApprovals.delete(`${id}:ask-me`);
         this.pendingApprovals.delete(`${id}:allow-all`);
+        if (sentMsgId) this.deleteEphemeralMessage(targetId, sentMsgId);
         resolve('ask-me');
       }, 120_000);
     });
@@ -944,6 +1100,42 @@ export class TelegramChannel extends BaseChannel {
       .replace(/&amp;/g, '&');
   }
 
+  /** Find the task-active key that matches a numeric chatId */
+  private findActiveTaskKey(chatId: number): string | undefined {
+    for (const [key, active] of this.taskActive) {
+      if (!active) continue;
+      // Keys can be 'notification', 'telegram:12345', or just '12345'
+      if (key === 'notification') return key;
+      const numericPart = key.startsWith('telegram:') ? key.split(':')[1] : key;
+      if (numericPart === String(chatId)) return key;
+    }
+    return undefined;
+  }
+
+  /** Refresh the status card with current step history + notices */
+  private async refreshStatusCard(targetId?: string): Promise<void> {
+    const key = targetId || 'notification';
+    const step = this.stepCounters.get(key) || 0;
+    const history = this.stepHistory.get(key) || [];
+    const notices = this.statusNotices.get(key) || [];
+
+    const recentHistory = history.slice(-5);
+    const recentNotices = notices.slice(-TelegramChannel.MAX_STATUS_NOTICES);
+
+    const lines = [
+      `⚙️ **Mercury working** (step ${step})`,
+      '',
+      ...recentHistory.map(h => `✅ ${h}`),
+    ];
+
+    if (recentNotices.length > 0) {
+      lines.push('');
+      lines.push(...recentNotices.map(n => `💬 ${n}`));
+    }
+
+    await this.updateStatusMessage(lines.join('\n'), targetId);
+  }
+
   private async updateStatusMessage(text: string, targetId?: string): Promise<void> {
     const chatIds = this.resolveTargetChatIds(targetId);
     if (chatIds.length === 0 || !this.bot) return;
@@ -981,6 +1173,8 @@ export class TelegramChannel extends BaseChannel {
     const key = targetId || 'notification';
     const msgId = this.statusMessageIds.get(key);
     if (msgId && this.bot) {
+      // Unpin before deleting if this was pinned
+      await this.unpinStatusMessage(targetId);
       const chatIds = this.resolveTargetChatIds(targetId);
       for (const chatId of chatIds) {
         await this.bot.api.deleteMessage(chatId, msgId).catch(() => {});
@@ -991,11 +1185,169 @@ export class TelegramChannel extends BaseChannel {
     }
   }
 
+  /** Pin the current status message to the top of the chat (silently) */
+  private async pinStatusMessage(targetId?: string): Promise<void> {
+    if (!this.bot) return;
+    const key = targetId || 'notification';
+    const msgId = this.statusMessageIds.get(key);
+    if (!msgId) return;
+
+    const chatIds = this.resolveTargetChatIds(targetId);
+    for (const chatId of chatIds) {
+      // Failsafe: unpin any existing pinned message first
+      const existingPin = this.pinnedMessageIds.get(key);
+      if (existingPin && existingPin !== msgId) {
+        await this.bot.api.unpinChatMessage(chatId, existingPin).catch(() => {});
+        this.pinnedMessageIds.delete(key);
+      }
+
+      // Don't re-pin the same message
+      if (existingPin === msgId) return;
+
+      try {
+        await this.bot.api.pinChatMessage(chatId, msgId, { disable_notification: true });
+        this.pinnedMessageIds.set(key, msgId);
+        logger.info({ chatId, msgId }, 'Pinned status message');
+      } catch (err: any) {
+        logger.warn({ err: err.message, chatId }, 'Failed to pin status message');
+      }
+    }
+  }
+
+  /** Unpin the current status message */
+  private async unpinStatusMessage(targetId?: string): Promise<void> {
+    if (!this.bot) return;
+    const key = targetId || 'notification';
+    const msgId = this.pinnedMessageIds.get(key);
+    if (!msgId) return;
+
+    const chatIds = this.resolveTargetChatIds(targetId);
+    for (const chatId of chatIds) {
+      await this.bot.api.unpinChatMessage(chatId, msgId).catch(() => {});
+    }
+    this.pinnedMessageIds.delete(key);
+  }
+
+  /** Track a message ID as ephemeral (will be deleted on task completion) */
+  private trackEphemeral(targetId: string | undefined, messageId: number): void {
+    const key = targetId || 'notification';
+    const ids = this.ephemeralMessageIds.get(key) || [];
+    ids.push(messageId);
+    this.ephemeralMessageIds.set(key, ids);
+  }
+
+  /** Delete a specific ephemeral message immediately (e.g., after permission response) */
+  private async deleteEphemeralMessage(targetId: string | undefined, messageId: number): Promise<void> {
+    if (!this.bot) return;
+    const chatIds = this.resolveTargetChatIds(targetId);
+    for (const chatId of chatIds) {
+      await this.bot.api.deleteMessage(chatId, messageId).catch(() => {});
+    }
+    // Remove from tracking
+    const key = targetId || 'notification';
+    const ids = this.ephemeralMessageIds.get(key);
+    if (ids) {
+      const idx = ids.indexOf(messageId);
+      if (idx !== -1) ids.splice(idx, 1);
+    }
+  }
+
+  /** Clean up all ephemeral messages for a chat (called on task completion) */
+  async cleanupEphemeralMessages(targetId?: string): Promise<void> {
+    if (!this.bot) return;
+    const key = targetId || 'notification';
+    const ids = this.ephemeralMessageIds.get(key) || [];
+    const chatIds = this.resolveTargetChatIds(targetId);
+    for (const chatId of chatIds) {
+      for (const msgId of ids) {
+        await this.bot.api.deleteMessage(chatId, msgId).catch(() => {});
+      }
+    }
+    this.ephemeralMessageIds.delete(key);
+  }
+
   resetStepCounter(targetId?: string): void {
     const key = targetId || 'notification';
     this.stepCounters.delete(key);
+    this.stepHistory.delete(key);
     this.statusText.delete(key);
+    this.statusNotices.delete(key);
+    this.endTask(targetId);
     this.deleteStatusMessage(targetId);
+  }
+
+  async sendCompletion(elapsedMs: number, stepCount: number, targetId?: string, meta?: { provider: string; model: string; inputTokens: number; outputTokens: number; totalTokens: number; budgetUsed: number; budgetTotal: number; budgetPercentage: number }): Promise<void> {
+    const secs = Math.floor(elapsedMs / 1000);
+    const mins = Math.floor(secs / 60);
+    const remSecs = secs % 60;
+    const timeStr = mins > 0 ? `${mins}m ${remSecs}s` : `${secs}s`;
+    const stepsStr = stepCount > 0 ? `${stepCount} step${stepCount !== 1 ? 's' : ''}` : '';
+    const parts = [stepsStr, timeStr].filter(Boolean).join(' · ');
+
+    const key = targetId || 'notification';
+    const history = this.stepHistory.get(key) || [];
+    const recentHistory = history.slice(-5);
+
+    const lines = [
+      `✅ **Task complete** (${parts})`,
+    ];
+
+    if (meta) {
+      const formatTokens = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+      lines.push(`☿ ${meta.model} via ${meta.provider} · ${formatTokens(meta.totalTokens)} tokens`);
+      const pct = Math.round(meta.budgetPercentage);
+      const barLen = 15;
+      const filled = Math.round((pct / 100) * barLen);
+      const bar = '█'.repeat(filled) + '░'.repeat(barLen - filled);
+      lines.push(`Budget: ${bar} ${pct}% (${formatTokens(meta.budgetUsed)} / ${formatTokens(meta.budgetTotal)})`);
+    }
+
+    if (recentHistory.length > 0) {
+      lines.push('');
+      lines.push(...recentHistory.map(h => `  ✓ ${h}`));
+    }
+
+    // Clean up: unpin + delete the status card, clean up ephemeral messages
+    await this.deleteStatusMessage(targetId);
+    await this.cleanupEphemeralMessages(targetId);
+
+    // End the task so deferred response flush uses normal send()
+    this.endTask(targetId);
+
+    const chatIds = this.resolveTargetChatIds(targetId);
+
+    // Flush deferred AI response first (the actual answer the user wants to see)
+    const deferred = this.deferredResponses.get(key);
+    if (deferred && deferred.trim()) {
+      this.deferredResponses.delete(key);
+      const deferredHtml = mdToTelegram(deferred);
+      const chunks = this.splitMessage(deferredHtml, MAX_MESSAGE_LENGTH);
+      for (const chatId of chatIds) {
+        for (const chunk of chunks) {
+          try {
+            await this.bot?.api.sendMessage(chatId, chunk, { parse_mode: 'HTML' });
+          } catch {
+            await this.bot?.api.sendMessage(chatId, this.stripHtml(chunk)).catch(() => {});
+          }
+        }
+      }
+    }
+
+    // Send the completion banner as a separate message
+    const html = mdToTelegram(lines.join('\n'));
+    for (const chatId of chatIds) {
+      try {
+        await this.bot?.api.sendMessage(chatId, html, { parse_mode: 'HTML' });
+      } catch {
+        await this.bot?.api.sendMessage(chatId, this.stripHtml(html)).catch(() => {});
+      }
+    }
+
+    this.stepCounters.delete(key);
+    this.stepHistory.delete(key);
+    this.statusText.delete(key);
+    this.statusMessageIds.delete(key);
+    this.statusNotices.delete(key);
   }
 
   private isImageFile(ext: string): boolean {

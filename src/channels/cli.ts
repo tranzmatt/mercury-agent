@@ -7,7 +7,7 @@ import type { ChannelMessage } from '../types/channel.js';
 import { BaseChannel, type PermissionMode } from './base.js';
 import { logger } from '../utils/logger.js';
 import { formatToolStep, formatToolResult } from '../utils/tool-label.js';
-import type { ChatMessage, ToolStep, PermissionPromptState, SidebarSection, SkillInfo, SubAgentInfo, ProviderInfo, TokenInfo, AppMode, WorkspaceState, WorkspaceTreeNode, WorkspaceGitFile, BackgroundTaskInfo } from '../ui/types.js';
+import type { ChatMessage, CompletionMeta, ToolStep, PermissionPromptState, SidebarSection, SkillInfo, SubAgentInfo, ProviderInfo, TokenInfo, AppMode, WorkspaceState, WorkspaceTreeNode, WorkspaceGitFile, BackgroundTaskInfo } from '../ui/types.js';
 import { TuiApp } from '../ui/App.js';
 
 export interface TuiState {
@@ -206,6 +206,25 @@ export class CLIChannel extends BaseChannel {
         this.expandWorkspaceNode();
         return;
       }
+      if (trimmed.startsWith('/ws scroll ')) {
+        const delta = parseInt(trimmed.slice(11), 10);
+        if (!isNaN(delta)) this.scrollWorkspaceCode(delta);
+        return;
+      }
+      if (trimmed.startsWith('/ws focus ')) {
+        const area = trimmed.slice(9).trim() as 'explorer' | 'code' | 'git' | 'chat';
+        if (['explorer', 'code', 'git', 'chat'].includes(area)) this.setWorkspaceFocus(area);
+        return;
+      }
+      if (trimmed === '/ws toggle-chat') {
+        this.toggleWorkspaceChat();
+        return;
+      }
+      if (trimmed.startsWith('/ws chat-scroll ')) {
+        const delta = parseInt(trimmed.slice(16), 10);
+        if (!isNaN(delta)) this.scrollWorkspaceChat(delta);
+        return;
+      }
       if (trimmed === '/menu' || trimmed === '/m') {
         this.update({ mode: 'menu' });
         return;
@@ -269,6 +288,28 @@ export class CLIChannel extends BaseChannel {
     this.update({
       chatMessages: [...this.state.chatMessages, msg],
       isThinking: false,
+    });
+  }
+
+  sendCompletion(elapsedMs: number, stepCount: number, meta?: CompletionMeta): void {
+    const secs = Math.floor(elapsedMs / 1000);
+    const mins = Math.floor(secs / 60);
+    const remSecs = secs % 60;
+    const timeStr = mins > 0 ? `${mins}m ${remSecs}s` : `${secs}s`;
+    const stepsStr = stepCount > 0 ? `${stepCount} step${stepCount !== 1 ? 's' : ''}` : '';
+    const parts = [stepsStr, timeStr].filter(Boolean).join(' · ');
+
+    const msg: ChatMessage = {
+      id: `done-${Date.now().toString(36)}`,
+      role: 'system',
+      content: `━━━ Task complete (${parts}) ━━━`,
+      timestamp: Date.now(),
+      completionMeta: meta,
+    };
+    this.update({
+      chatMessages: [...this.state.chatMessages, msg],
+      isThinking: false,
+      toolSteps: [],
     });
   }
 
@@ -453,6 +494,20 @@ export class CLIChannel extends BaseChannel {
     });
   }
 
+  async presentChoicePrompt(question: string, options: Array<{ value: string; label: string }>): Promise<string> {
+    return new Promise((resolve) => {
+      this.permissionResolver = (val) => resolve(String(val));
+      this.update({
+        permissionPrompt: {
+          type: 'mode',
+          message: question,
+          options,
+          resolve: () => {},
+        },
+      });
+    });
+  }
+
   async askToContinue(question: string, _targetId?: string): Promise<boolean> {
     return new Promise((resolve) => {
       this.permissionResolver = (val) => {
@@ -593,7 +648,17 @@ export class CLIChannel extends BaseChannel {
     if (!node) return;
     if (!node.isDir) {
       const preview = this.readFilePreview(node.path);
-      this.update({ workspace: { ...ws, selectedPath: node.path, openedFilePath: node.path, openedFilePreview: preview, lastAction: `Opened file: ${node.path}` } });
+      this.update({
+        workspace: {
+          ...ws,
+          selectedPath: node.path,
+          openedFilePath: node.path,
+          openedFilePreview: preview,
+          codeScrollOffset: 0,
+          focusArea: 'code',
+          lastAction: `Opened: ${path.basename(node.path)}`,
+        },
+      });
       return;
     }
     const expanded = !node.expanded;
@@ -647,18 +712,60 @@ export class CLIChannel extends BaseChannel {
       unstagedCount,
       branch,
       lastAction,
+      codeScrollOffset: this.state.workspace?.codeScrollOffset ?? 0,
+      focusArea: this.state.workspace?.focusArea ?? 'explorer',
+      chatCollapsed: this.state.workspace?.chatCollapsed ?? false,
+      chatScrollOffset: this.state.workspace?.chatScrollOffset ?? 0,
+      rightPanel: this.state.workspace?.rightPanel ?? 'chat',
     };
   }
 
   closeWorkspaceFile(): void {
     const ws = this.state.workspace;
     if (!ws?.active) return;
-    this.update({ workspace: { ...ws, openedFilePath: null, openedFilePreview: [], lastAction: 'Closed file preview' } });
+    this.update({ workspace: { ...ws, openedFilePath: null, openedFilePreview: [], codeScrollOffset: 0, focusArea: 'explorer', lastAction: 'Closed file preview' } });
+  }
+
+  scrollWorkspaceCode(delta: number): void {
+    const ws = this.state.workspace;
+    if (!ws?.active || !ws.openedFilePreview.length) return;
+    const maxOffset = Math.max(0, ws.openedFilePreview.length - 1);
+    const next = Math.max(0, Math.min(maxOffset, ws.codeScrollOffset + delta));
+    if (next !== ws.codeScrollOffset) {
+      this.update({ workspace: { ...ws, codeScrollOffset: next } });
+    }
+  }
+
+  setWorkspaceFocus(area: 'explorer' | 'code' | 'git' | 'chat'): void {
+    const ws = this.state.workspace;
+    if (!ws?.active) return;
+    // When focusing git or chat, also switch the right panel
+    const rightPanel = area === 'git' ? 'git' : area === 'chat' ? 'chat' : ws.rightPanel;
+    this.update({ workspace: { ...ws, focusArea: area, rightPanel } });
+  }
+
+  toggleWorkspaceChat(): void {
+    const ws = this.state.workspace;
+    if (!ws?.active) return;
+    // Toggle right panel between chat and git
+    const rightPanel = ws.rightPanel === 'chat' ? 'git' : 'chat';
+    const focusArea = rightPanel === 'chat' ? 'chat' : ws.focusArea === 'chat' ? 'explorer' : ws.focusArea;
+    this.update({ workspace: { ...ws, rightPanel, focusArea } });
+  }
+
+  scrollWorkspaceChat(delta: number): void {
+    const ws = this.state.workspace;
+    if (!ws?.active) return;
+    const maxOffset = Math.max(0, this.state.chatMessages.length - 1);
+    const next = Math.max(0, Math.min(maxOffset, ws.chatScrollOffset + delta));
+    if (next !== ws.chatScrollOffset) {
+      this.update({ workspace: { ...ws, chatScrollOffset: next } });
+    }
   }
 
   private exitWorkspaceToChat(): void {
     const ws = this.state.workspace;
-    const nextWorkspace = ws ? { ...ws, active: false, lastAction: 'Exited workspace mode' } : null;
+    const nextWorkspace = ws ? { ...ws, active: false, focusArea: 'explorer' as const, codeScrollOffset: 0, chatCollapsed: false, chatScrollOffset: 0, rightPanel: 'chat' as const, lastAction: 'Exited workspace mode' } : null;
     this.update({
       mode: 'chat',
       workspace: nextWorkspace,
@@ -670,7 +777,7 @@ export class CLIChannel extends BaseChannel {
   private readFilePreview(filePath: string): string[] {
     try {
       const raw = fs.readFileSync(filePath, 'utf-8');
-      return raw.split('\n').slice(0, 80);
+      return raw.split('\n').slice(0, 500);
     } catch {
       return ['(Unable to read file preview)'];
     }

@@ -1,5 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { logger } from '../utils/logger.js';
+import { getMercuryHome } from '../utils/config.js';
 
 export type BgTaskType = 'shell' | 'agent';
 export type BgTaskStatus = 'running' | 'completed' | 'failed' | 'timed_out' | 'cancelled';
@@ -40,11 +43,48 @@ const PRUNE_AGE_MS = 60 * 60 * 1000;
 const SIGTERM_GRACE_MS = 3000;
 const MAX_PREVIEW = 200;
 const DEFAULT_SHELL_TIMEOUT_MS = 0;
+const BG_TASKS_FILE = 'background-tasks.json';
 
 let taskCounter = 0;
 
+const ADJECTIVES = [
+  'swift', 'calm', 'bold', 'warm', 'cool', 'keen', 'neat', 'wise',
+  'fair', 'glad', 'blue', 'gold', 'soft', 'wild', 'deep', 'pure',
+  'slim', 'tall', 'kind', 'fast', 'red', 'dark', 'pale', 'loud',
+  'thin', 'rich', 'raw', 'dry', 'old', 'new', 'big', 'low',
+  'shy', 'dim', 'hot', 'icy', 'odd', 'tan', 'apt', 'fit',
+  'lax', 'coy', 'sly', 'wry', 'zen', 'deft', 'grim', 'snug',
+];
+
+const NOUNS = [
+  'fox', 'owl', 'elk', 'ant', 'bee', 'cat', 'dog', 'ram',
+  'jay', 'cod', 'eel', 'yak', 'bat', 'hen', 'ape', 'gnu',
+  'oak', 'elm', 'ash', 'bay', 'fir', 'ivy', 'gem', 'ore',
+  'sun', 'moon', 'star', 'wave', 'wind', 'rain', 'snow', 'bolt',
+  'flame', 'spark', 'leaf', 'seed', 'root', 'vine', 'reef', 'cove',
+  'peak', 'vale', 'dune', 'isle', 'pond', 'brook', 'dale', 'mesa',
+];
+
+const usedIds = new Set<string>();
+
 function nextId(): string {
-  return `bg-${++taskCounter}`;
+  taskCounter += 1;
+  // Try up to 10 times to find a unique combo
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+    const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
+    const id = `${adj}-${noun}`;
+    if (!usedIds.has(id)) {
+      usedIds.add(id);
+      return id;
+    }
+  }
+  // Fallback: append counter
+  const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+  const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
+  const id = `${adj}-${noun}-${taskCounter}`;
+  usedIds.add(id);
+  return id;
 }
 
 function tailTruncate(str: string, maxLen: number): string {
@@ -64,6 +104,7 @@ export class BackgroundTaskManager {
   private pruneInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
+    this.load();
     this.pruneInterval = setInterval(() => this.prune(), 5 * 60 * 1000);
   }
 
@@ -81,6 +122,7 @@ export class BackgroundTaskManager {
     for (const [, t] of this.sigkillTimeouts) {
       clearTimeout(t);
     }
+    this.save();
   }
 
   onGlobalComplete(cb: TaskCompleteCallback): void {
@@ -105,6 +147,7 @@ export class BackgroundTaskManager {
       timeoutMs,
     };
     this.tasks.set(id, task);
+    this.save();
 
     try {
       const child = spawn(command, [], {
@@ -184,6 +227,7 @@ export class BackgroundTaskManager {
       timeoutMs: 0,
     };
     this.tasks.set(id, task);
+    this.save();
     logger.info({ taskId: id, agentId, task: taskDescription }, 'Background agent task started');
     return id;
   }
@@ -195,6 +239,7 @@ export class BackgroundTaskManager {
     if (task.stdout.length > MAX_OUTPUT) {
       task.stdout = tailTruncate(task.stdout, MAX_OUTPUT);
     }
+    this.save();
   }
 
   completeAgentTask(bgTaskId: string, exitCode: number | null, status: BgTaskStatus, output?: string): void {
@@ -224,8 +269,33 @@ export class BackgroundTaskManager {
     task.exitCode = null;
     this.clearTimeouts(taskId);
     this.notifyComplete(task);
+    this.save();
     logger.info({ taskId }, 'Background task cancelled');
     return true;
+  }
+
+  cancelAll(): number {
+    let count = 0;
+    for (const [id, task] of this.tasks) {
+      if (task.status === 'running') {
+        if (task.type === 'shell') {
+          this.killTask(id, 'SIGTERM');
+          const sigkill = setTimeout(() => {
+            this.killTask(id, 'SIGKILL');
+          }, SIGTERM_GRACE_MS);
+          this.sigkillTimeouts.set(id, sigkill);
+        }
+        task.status = 'cancelled';
+        task.completedAt = Date.now();
+        task.exitCode = null;
+        this.clearTimeouts(id);
+        this.notifyComplete(task);
+        count++;
+      }
+    }
+    if (count > 0) this.save();
+    logger.info({ count }, 'All background tasks cancelled');
+    return count;
   }
 
   get(taskId: string): BackgroundTask | undefined {
@@ -269,6 +339,7 @@ export class BackgroundTaskManager {
       }
     }
     if (pruned > 0) {
+      this.save();
       logger.info({ pruned }, 'Pruned completed background tasks');
     }
     return pruned;
@@ -282,6 +353,7 @@ export class BackgroundTaskManager {
         cleared++;
       }
     }
+    if (cleared > 0) this.save();
     return cleared;
   }
 
@@ -305,6 +377,7 @@ export class BackgroundTaskManager {
 
     logger.info({ taskId: id, status, exitCode }, 'Background task completed');
     this.notifyComplete(task);
+    this.save();
   }
 
   private notifyComplete(task: BackgroundTask): void {
@@ -343,6 +416,50 @@ export class BackgroundTaskManager {
         this.tasks.delete(oldest.id);
       }
     }
+    this.save();
+  }
+
+  private load(): void {
+    const filePath = this.getFilePath();
+    if (!existsSync(filePath)) return;
+
+    try {
+      const raw = readFileSync(filePath, 'utf-8');
+      const parsed = JSON.parse(raw) as BackgroundTask[];
+      this.tasks.clear();
+
+      for (const task of parsed) {
+        if (!task?.id) continue;
+        if (task.status === 'running') {
+          task.status = 'failed';
+          task.completedAt = Date.now();
+          task.stderr = `${task.stderr}\nRecovered after restart: task was running when process exited.`.trim();
+        }
+        this.tasks.set(task.id, task);
+        usedIds.add(task.id);
+      }
+
+      logger.info({ count: this.tasks.size }, 'Background tasks loaded');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to load background tasks');
+      this.tasks.clear();
+    }
+  }
+
+  private save(): void {
+    try {
+      const dir = join(getMercuryHome(), 'memory');
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      writeFileSync(this.getFilePath(), JSON.stringify([...this.tasks.values()], null, 2), 'utf-8');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to save background tasks');
+    }
+  }
+
+  private getFilePath(): string {
+    return join(getMercuryHome(), 'memory', BG_TASKS_FILE);
   }
 
   private toSummary(task: BackgroundTask): BackgroundTaskSummary {

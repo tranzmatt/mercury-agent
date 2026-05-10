@@ -32,6 +32,22 @@ export interface WorkspaceState {
   unstagedCount: number;
   branch: string;
   lastAction: string;
+  codeScrollOffset: number;
+  focusArea: 'explorer' | 'code' | 'git' | 'chat';
+  chatCollapsed: boolean;
+  chatScrollOffset: number;
+  rightPanel: 'chat' | 'git';
+}
+
+export interface CompletionMeta {
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  budgetUsed: number;      // daily tokens used so far
+  budgetTotal: number;     // daily budget limit
+  budgetPercentage: number; // 0-100
 }
 
 export interface ChatMessage {
@@ -40,6 +56,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   streaming?: boolean;
+  completionMeta?: CompletionMeta;
 }
 
 export interface ToolStep {
