@@ -599,8 +599,12 @@ export interface GraphData {
 export interface GraphNode {
   id: string;
   label: string;
+  fullLabel?: string;
   type: string;
   size?: number;
+  importance?: number;
+  confidence?: number;
+  color?: string;
 }
 
 export interface GraphEdge {
