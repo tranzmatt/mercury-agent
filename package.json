@@ -47,7 +47,7 @@
     "type": "git",
     "url": "git+https://github.com/cosmicstack-labs/mercury-agent.git"
   },
-  "homepage": "https://mercury.cosmicstack.org",
+  "homepage": "https://mercuryagent.sh",
   "bugs": {
     "url": "https://github.com/cosmicstack-labs/mercury-agent/issues"
   },

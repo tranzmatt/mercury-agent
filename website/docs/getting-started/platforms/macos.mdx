@@ -9,7 +9,7 @@ Mercury supports macOS 11 (Big Sur) and later, on both **Apple Silicon (arm64)**
 ## Quickest install (recommended)
 
 ```bash
-curl -fsSL https://mercury.cosmicstack.org/install.sh | sh
+curl -fsSL https://mercuryagent.sh/install.sh | sh
 ```
 
 This downloads the latest binary for your CPU, verifies its SHA-256 against the published `checksums.txt`, and installs to `~/.mercury/bin/mercury`. Your shell `PATH` is updated in `~/.zshrc` (or `~/.bashrc` if you use bash).
@@ -48,13 +48,13 @@ uname -m   # arm64 or x86_64
 ## Pinning a version
 
 ```bash
-curl -fsSL https://mercury.cosmicstack.org/install.sh | MERCURY_VERSION=1.1.9 sh
+curl -fsSL https://mercuryagent.sh/install.sh | MERCURY_VERSION=1.1.9 sh
 ```
 
 ## Custom install location
 
 ```bash
-curl -fsSL https://mercury.cosmicstack.org/install.sh | \
+curl -fsSL https://mercuryagent.sh/install.sh | \
   MERCURY_INSTALL=/opt/mercury MERCURY_NO_PATH=1 sh
 ```
 

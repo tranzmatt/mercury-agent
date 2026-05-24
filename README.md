@@ -36,12 +36,12 @@
 
 ```bash
 # macOS / Linux
-curl -fsSL https://mercury.cosmicstack.org/install.sh | sh
+curl -fsSL https://mercuryagent.sh/install.sh | sh
 ```
 
 ```powershell
 # Windows
-irm https://mercury.cosmicstack.org/install.ps1 | iex
+irm https://mercuryagent.sh/install.ps1 | iex
 ```
 
 Or via npm if you already have Node.js 20+:

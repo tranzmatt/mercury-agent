@@ -1,8 +1,8 @@
 /**
  * Copies the install scripts from the repo's scripts/ directory into the
  * Docusaurus static/ folder so they're published at:
- *   https://mercury.cosmicstack.org/install.sh
- *   https://mercury.cosmicstack.org/install.ps1
+ *   https://mercuryagent.sh/install.sh
+ *   https://mercuryagent.sh/install.ps1
  *
  * Runs automatically as a pre-build hook (see website/package.json).
  * Keeping a single source of truth in scripts/ avoids drift between the

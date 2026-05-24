@@ -9,7 +9,7 @@ Mercury runs on any modern Linux distro with glibc ≥ 2.31 (Ubuntu 20.04+, Debi
 ## Quickest install (recommended)
 
 ```bash
-curl -fsSL https://mercury.cosmicstack.org/install.sh | sh
+curl -fsSL https://mercuryagent.sh/install.sh | sh
 ```
 
 The installer picks the right binary for your CPU, verifies the SHA-256 checksum, places it at `~/.mercury/bin/mercury`, and adds that directory to your shell `PATH` (`~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`).
@@ -47,13 +47,13 @@ For armv7 (32-bit Pi, older boards), use the [npm route](#via-npm-if-you-already
 ## Pinning a version
 
 ```bash
-curl -fsSL https://mercury.cosmicstack.org/install.sh | MERCURY_VERSION=1.1.9 sh
+curl -fsSL https://mercuryagent.sh/install.sh | MERCURY_VERSION=1.1.9 sh
 ```
 
 ## System-wide install
 
 ```bash
-curl -fsSL https://mercury.cosmicstack.org/install.sh | \
+curl -fsSL https://mercuryagent.sh/install.sh | \
   sudo MERCURY_INSTALL=/usr/local MERCURY_NO_PATH=1 sh
 ```
 

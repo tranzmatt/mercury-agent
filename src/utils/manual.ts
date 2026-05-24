@@ -233,7 +233,7 @@ export function getManual(): string {
   }
 
   sections.push('');
-  sections.push(chalk.dim('  mercury.cosmicstack.org'));
+  sections.push(chalk.dim('  mercuryagent.sh'));
   sections.push('');
 
   return sections.join('\n');

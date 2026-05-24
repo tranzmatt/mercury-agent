@@ -1,6 +1,6 @@
 # Mercury installer for Windows.
 #
-#   irm https://mercury.cosmicstack.org/install.ps1 | iex
+#   irm https://mercuryagent.sh/install.ps1 | iex
 #
 # Environment variables:
 #   $env:MERCURY_VERSION   Version to install (e.g. "1.1.9"). Default: latest.
@@ -68,7 +68,7 @@ function Update-UserPath ([string]$BinDir) {
 
 Write-Host ''
 Write-Host '☿ Mercury installer' -ForegroundColor White
-Write-Host '   Soul-driven AI agent · https://mercury.cosmicstack.org'
+Write-Host '   Soul-driven AI agent · https://mercuryagent.sh'
 Write-Host ''
 
 $arch = Get-MercuryArch

@@ -85,7 +85,7 @@ function banner() {
   console.log('');
   console.log(chalk.bold.cyan('  MERCURY'));
   console.log(chalk.white('  Your soul-driven AI agent'));
-  console.log(chalk.dim(`  v${pkgVersion} · by Cosmic Stack · mercury.cosmicstack.org`));
+  console.log(chalk.dim(`  v${pkgVersion} · by Cosmic Stack · mercuryagent.sh`));
   console.log('');
 }
 
@@ -98,7 +98,7 @@ function splashScreen() {
   console.log(chalk.bold.cyan('  MERCURY'));
   console.log(chalk.dim('  Your soul-driven AI agent'));
   console.log(chalk.cyan('  by Cosmic Stack'));
-  console.log(chalk.dim('  mercury.cosmicstack.org'));
+  console.log(chalk.dim('  mercuryagent.sh'));
   console.log('');
 }
 
@@ -1227,7 +1227,7 @@ async function configure(existingConfig?: MercuryConfig): Promise<void> {
   }
   console.log('');
   console.log(chalk.cyan(`  ${config.identity.name} is ready. Run \`mercury start\` to chat.`));
-  console.log(chalk.dim('  mercury.cosmicstack.org'));
+  console.log(chalk.dim('  mercuryagent.sh'));
   console.log('');
 }
 

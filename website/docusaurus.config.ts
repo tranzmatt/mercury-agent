@@ -11,7 +11,7 @@ const config: Config = {
     v4: true,
   },
 
-  url: 'https://mercury.cosmicstack.org',
+  url: 'https://mercuryagent.sh',
   baseUrl: '/',
   trailingSlash: false,
 

@@ -3,7 +3,7 @@
 #
 # Mercury installer for macOS and Linux.
 #
-#   curl -fsSL https://mercury.cosmicstack.org/install.sh | sh
+#   curl -fsSL https://mercuryagent.sh/install.sh | sh
 #
 # Environment variables:
 #   MERCURY_VERSION   Version to install (e.g. "1.1.9"). Default: latest.
@@ -146,7 +146,7 @@ maybe_update_path() {
 
 main() {
   printf '\n%s\n' "$(c_bold '☿ Mercury installer')"
-  printf '   Soul-driven AI agent · https://mercury.cosmicstack.org\n\n'
+  printf '   Soul-driven AI agent · https://mercuryagent.sh\n\n'
 
   os=$(detect_os)
   arch=$(detect_arch)

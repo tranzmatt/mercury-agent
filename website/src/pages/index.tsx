@@ -222,9 +222,9 @@ function osBinaryAsset(os: OsId): string {
 
 function osInstallSnippet(os: OsId): string {
   if (os === 'windows') {
-    return 'irm https://mercury.cosmicstack.org/install.ps1 | iex';
+    return 'irm https://mercuryagent.sh/install.ps1 | iex';
   }
-  return 'curl -fsSL https://mercury.cosmicstack.org/install.sh | sh';
+  return 'curl -fsSL https://mercuryagent.sh/install.sh | sh';
 }
 
 function HeroInstall(): React.ReactElement {
@@ -420,11 +420,11 @@ export default function LandingPage(): React.ReactElement {
         <meta property="og:title" content="Mercury — AI Agent That Thinks, Acts, and Asks Permission" />
         <meta property="og:description" content="An AI coding agent with real-time progress, multi-agent orchestration, and hardened permissions. Runs 24/7 from CLI or Telegram." />
         <meta property="og:type" content="website" />
-        <meta property="og:url" content="https://mercury.cosmicstack.org" />
-        <meta property="og:image" content="https://mercury.cosmicstack.org/img/card.png" />
+        <meta property="og:url" content="https://mercuryagent.sh" />
+        <meta property="og:image" content="https://mercuryagent.sh/img/card.png" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content="Mercury — AI Agent That Thinks, Acts, and Asks Permission" />
-        <meta name="twitter:image" content="https://mercury.cosmicstack.org/img/card.png" />
+        <meta name="twitter:image" content="https://mercuryagent.sh/img/card.png" />
       </Head>
 
       <div className="lp-page">
