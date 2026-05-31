@@ -64,14 +64,16 @@ const sidebars: SidebarsConfig = {
         'reference/provider-fallback',
         'reference/scheduling',
         'reference/skills',
+        'reference/token-saver',
       ],
     },
     {
       type: 'category',
       label: 'Releases',
-      collapsed: true,
+      collapsed: false,
       items: [
         'releases/releases',
+        'releases/1.1.11',
         'releases/1.1.9',
         'releases/1.1.7',
         'releases/1.1.6',
