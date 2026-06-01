@@ -5,6 +5,44 @@ import process from 'node:process';
 import chalk from 'chalk';
 import { getMercuryHome } from '../utils/config.js';
 
+/**
+ * Detect whether Mercury is running from a standalone, single-file binary
+ * (produced by `bun build --compile`). In that case `process.execPath` IS
+ * the Mercury binary and `process.argv[1]` is a bun-virtual path (e.g.
+ * `/$bunfs/root/...`) that must NOT be forwarded to a child process.
+ */
+export function isStandaloneBinary(): boolean {
+  // Bun sets this flag whenever the runtime is bun (including --compile output).
+  const isBunRuntime = typeof (process.versions as any).bun === 'string';
+  if (!isBunRuntime) return false;
+
+  const arg1 = process.argv[1];
+  if (!arg1) return true;
+  // Bun's embedded fs path markers (POSIX `$bunfs`, Windows `B:/~BUN/`).
+  if (arg1.includes('$bunfs') || arg1.includes('/~BUN/') || arg1.includes('\\~BUN\\')) return true;
+  // Heuristic: standalone binary's execPath is not `node`/`bun` (it's the app name).
+  const execName = (process.execPath.split(/[\\/]/).pop() || '').toLowerCase();
+  if (!execName.startsWith('node') && !execName.startsWith('bun')) return true;
+  return false;
+}
+
+/**
+ * Build the argv used to respawn Mercury as a detached daemon.
+ * For standalone binaries we invoke the binary directly (no script path),
+ * because Commander treats the bun-virtual path as an unknown subcommand.
+ */
+export function buildDaemonSpawnArgs(): { command: string; args: string[] } {
+  if (isStandaloneBinary()) {
+    return { command: process.execPath, args: ['start', '--daemon'] };
+  }
+  const script = process.argv[1];
+  if (!script) {
+    // Last-resort guard — caller will surface the error via ensureDaemonRunning().
+    throw new Error('Cannot determine Mercury entry script for daemon spawn');
+  }
+  return { command: process.execPath, args: [script, 'start', '--daemon'] };
+}
+
 const PID_FILE = 'daemon.pid';
 const LOG_FILE = 'daemon.log';
 
@@ -63,7 +101,8 @@ export function ensureDaemonRunning(): { pid: number; fresh: boolean } {
   const isWin = process.platform === 'win32';
   const outFd = openSync(logFile, 'a');
 
-  const child = spawn(process.execPath, [process.argv[1], 'start', '--daemon'], {
+  const { command, args } = buildDaemonSpawnArgs();
+  const child = spawn(command, args, {
     detached: true,
     stdio: ['ignore', outFd, outFd],
     env: { ...process.env },

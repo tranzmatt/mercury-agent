@@ -1,53 +1,58 @@
-# Release v1.1.11
+# Release v1.1.12
 
-## ☿ Mercury Agent v1.1.11
+## ☿ Mercury Agent v1.1.12 — Daemon hotfix
 
-**Token Saver Mode, full Skill System, and standalone binaries.**
+Hotfix on top of [v1.1.11](https://github.com/cosmicstack-labs/mercury-agent/releases/tag/v1.1.11). The standalone single-file binaries introduced in 1.1.11 could not start in the background — which meant Telegram never came online for anyone who installed Mercury via the one-line installer (the recommended path for web servers).
 
-The biggest release since the 1.1.x line began — Mercury now ships as a single executable on every major OS, learns new tricks via user-defined skills, and gives you a live status bar with token usage at the bottom of every session.
+### What Was Broken
 
-### What's New
+`src/cli/daemon.ts` spawned the daemon child as:
 
-- **Token Saver Mode** (#69) — opt-in mode that aggressively trims session context so long-running agents don't bleed tokens. Pairs with a redesigned bottom status bar showing provider, model, and live token usage, plus per-step spinners (one per tool call) instead of a single global one.
-- **Skill System** (#67) — Mercury can now load user-defined behaviors as markdown files in `~/.mercury/skills/`. Skills get routed to on demand based on keyword/semantic match and inject their instructions only when relevant.
-- **Screenshot skill** — built-in skill for capturing website screenshots with configurable viewport and dark/light mode support.
-- **Standalone binaries** (#61) — `mercury` now ships as a single executable for:
-  - macOS arm64 / x64
-  - Linux x64 / arm64
-  - Windows x64
+```
+spawn(process.execPath, [process.argv[1], 'start', '--daemon'], ...)
+```
 
-  One-line installers are available per OS; no Node runtime required. The install widget on [mercuryagent.sh](https://mercuryagent.sh) detects your platform automatically.
-- **Domain migration** — Mercury's home is now [mercuryagent.sh](https://mercuryagent.sh) (was `mercury.cosmicstack.org`).
-- **Chinese translations** for README, ARCHITECTURE, and CHANGELOG (#53).
+- **npm install:** resolved to `node dist/index.js start --daemon` ✅
+- **Standalone binary** (`bun build --compile`): resolved to `mercury "/$bunfs/root/.../index.js" start --daemon` — Commander treated the bun-virtual path as an unknown subcommand, the child exited immediately, and `channels.startAll()` (the only place Telegram's `bot.start()` runs in daemon mode) was never reached.
 
-### Bug Fixes
+`mercury service install` had the same flaw and was persisting that broken command into the LaunchAgent plist / systemd unit / Task Scheduler entry, so the failure also survived reboots.
 
-- **Skill routing no longer fans out to 10 skills** (#68) — when the router is genuinely uncertain, you now get a clean numbered picker (`#1`, `#2`, …) instead of every weakly-matching skill firing at once.
-- **No more spurious ambiguity prompts** from incidental keyword overlap. The matcher now requires real signal before asking you to disambiguate.
-- **Release asset names aligned with published binaries** (#63) — fixes one-line installer scripts that were pointing at the wrong filenames in earlier GitHub releases.
-- **Shell permission guard now checks each segment independently** (#48) — addresses a reported advisory where a combined shell pattern could slip a disallowed command past the permission check when chained with `;`, `&&`, or `|`.
+### Fixed
 
-### Maintenance
+- **Daemon now spawns correctly from both install paths** — new `isStandaloneBinary()` detection in `src/cli/daemon.ts` chooses between `[node, script, 'start', '--daemon']` (npm) and `[mercury, 'start', '--daemon']` (standalone binary). Detection looks at `process.versions.bun`, `$bunfs` / `~BUN` markers in `argv[1]`, and the `execPath` basename, so `node`, `bun <script>` (dev), and standalone `mercury` all do the right thing.
+- **System-service files generated correctly for standalone installs** — macOS LaunchAgent `ProgramArguments`, Linux systemd `ExecStart=`, and Windows `schtasks /tr` now use the binary-only invocation when running from a compiled binary.
+- **Telegram comes online again in background mode** — direct consequence of the daemon fix.
 
-- Removed the `anonymous-file-uploader` skill — no longer needed.
-- `pino` upgraded 9.14.0 → ^10.3.1 (#51).
-- Spinner polish, docs refreshes, and a cleaner status line throughout the TUI.
-
-### Install / Upgrade
+### Upgrade
 
 **npm:**
 ```
-npm install -g @cosmicstack/mercury-agent@1.1.11
+npm install -g @cosmicstack/mercury-agent@1.1.12
+mercury restart
 ```
 
-**Standalone binary:** download from the release assets below (checksums in `checksums.txt`), or use the one-line installer from [mercuryagent.sh](https://mercuryagent.sh).
+**Standalone binary:** re-run the one-line installer from [mercuryagent.sh](https://mercuryagent.sh), then:
+```
+mercury restart
+```
 
-### Migration from v1.1.9
+If you had `mercury service install` set up under 1.1.11 (so the broken command got written into your service file), reinstall it:
+```
+mercury service uninstall
+mercury service install
+```
 
-No breaking changes. Skill System and Token Saver Mode are both opt-in. Existing configs, providers, and `~/.mercury/` data carry over unchanged.
+### Verifying The Fix
 
-> `1.1.10` was skipped to keep numbering aligned across publish channels.
+```
+mercury start
+mercury status      # should show a live PID
+mercury logs        # should show "Mercury is live (daemon mode)" and Telegram polling
+```
 
----
+### Files Touched
 
-**Full Changelog**: https://github.com/cosmicstack-labs/mercury-agent/compare/v1.1.9...v1.1.11
+- `src/cli/daemon.ts` — `isStandaloneBinary()` + `buildDaemonSpawnArgs()`; `ensureDaemonRunning()` uses them.
+- `src/cli/service.ts` — `getServiceLaunchArgs()` wired into macOS / Linux / Windows installers.
+
+**Full Changelog**: https://github.com/cosmicstack-labs/mercury-agent/compare/v1.1.11...v1.1.12

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.12 — Daemon fix for standalone binaries
+
+Hotfix on top of 1.1.11. The standalone single-file binaries shipped in 1.1.11 could not start in the background — which also meant Telegram never came online when Mercury was installed via the one-line installer (the recommended path for servers).
+
+### Fixed
+
+- **Daemon now starts correctly from standalone binaries** — `src/cli/daemon.ts` used to spawn the daemon as `[process.execPath, process.argv[1], 'start', '--daemon']`. For npm installs that became `node dist/index.js start --daemon` and worked. For `bun --compile` standalone binaries, `process.execPath` is the Mercury binary itself and `process.argv[1]` is a bun-virtual `$bunfs/...` path, so the spawn became `mercury "$bunfs/..." start --daemon` — Commander treated the bunfs path as an unknown subcommand, the child died immediately, and `channels.startAll()` (the only place Telegram is started in daemon mode) was never reached.
+- **`mercury service install` no longer persists broken commands** — the LaunchAgent plist, systemd unit, and Windows Task Scheduler entry now contain the binary-only invocation (no script path) when running from a standalone binary, so auto-start on boot works end-to-end.
+- **Telegram now comes online in background mode for standalone-binary users** — direct consequence of the daemon fix.
+
+### Internal
+
+- New `isStandaloneBinary()` / `buildDaemonSpawnArgs()` helpers in `src/cli/daemon.ts` plus `getServiceLaunchArgs()` in `src/cli/service.ts`, wired through every OS installer. Detection uses `process.versions.bun`, `$bunfs` / `~BUN` markers in `argv[1]`, and the `execPath` basename — so `node`, `bun <script>`, and standalone `mercury` invocations all do the right thing.
+
+### Migration from 1.1.11
+
+No changes required. After upgrading, run `mercury restart` (or `mercury service uninstall && mercury service install` if you had the service installed under 1.1.11 with the broken command persisted).
+
 ## 1.1.11 — Token Saver Mode, Skills System & Standalone Binaries
 
 The biggest release since the 1.1.x line started. Adds a full **Skill System**, a **Token Saver Mode** for cheaper sessions, **standalone binaries** for users who don't want npm, and a redesigned bottom status bar with per-step spinners.

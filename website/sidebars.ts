@@ -73,6 +73,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'releases/releases',
+        'releases/1.1.12',
         'releases/1.1.11',
         'releases/1.1.9',
         'releases/1.1.7',

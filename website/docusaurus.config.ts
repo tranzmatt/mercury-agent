@@ -91,7 +91,7 @@ const config: Config = {
       },
       items: [
         {to: '/docs', label: 'Docs', position: 'left'},
-        {to: '/docs/releases/1.1.11', label: 'Releases', position: 'left'},
+        {to: '/docs/releases/1.1.12', label: 'Releases', position: 'left'},
         {
           href: 'https://github.com/cosmicstack-labs/mercury-agent',
           label: 'GitHub',
