@@ -1,0 +1,154 @@
+{
+  "catalogVersion": 1,
+  "updatedAt": "2026-10-23T12:40:54Z",
+  "plugins": [
+    {
+      "id": "whatsapp",
+      "name": "WhatsApp",
+      "description": "Chat with Mercury on WhatsApp and talk to it by voice call: OpenAI by default, or Gemini, Grok, ElevenLabs, Azure, Qwen, or your own Mercury model with Deepgram/Cartesia/MiniMax/Sarvam voices. Runs on a spare number as a linked device (unofficial protocol).",
+      "version": "0.1.2",
+      "kind": "out-of-process",
+      "tier": "official",
+      "homepage": "https://github.com/cosmicstack-labs/mercury-agent/tree/main/plugins/whatsapp",
+      "engines": {
+        "mercury": ">=1.3.9 <2.0.0",
+        "pluginApi": "^1.1.0"
+      },
+      "artifacts": {
+        "darwin-arm64": {
+          "url": "https://github.com/cosmicstack-labs/mercury-agent/releases/download/whatsapp-v0.1.2/mercury-plugin-whatsapp-darwin-arm64.tgz",
+          "sha256": "cbcc071a0bcf150605785c010eb71cefba11ca1e62f3c2227e9c2e788d3afe11",
+          "size": 4214987
+        },
+        "darwin-x64": {
+          "url": "https://github.com/cosmicstack-labs/mercury-agent/releases/download/whatsapp-v0.1.2/mercury-plugin-whatsapp-darwin-x64.tgz",
+          "sha256": "c613d5fa2c99d83093651b77bebcceb107d920104e603422e1a091baed990f14",
+          "size": 4553375
+        },
+        "linux-x64": {
+          "url": "https://github.com/cosmicstack-labs/mercury-agent/releases/download/whatsapp-v0.1.2/mercury-plugin-whatsapp-linux-x64.tgz",
+          "sha256": "f2e954d6c2440d337627e996603e5ff46c26c666963b95750aaa559143fbcb7c",
+          "size": 4889806
+        },
+        "linux-arm64": {
+          "url": "https://github.com/cosmicstack-labs/mercury-agent/releases/download/whatsapp-v0.1.2/mercury-plugin-whatsapp-linux-arm64.tgz",
+          "sha256": "457743147c7df201dc4df44f6c524951eec23529e7097911906b6981ba3ce2b6",
+          "size": 4708142
+        },
+        "win32-x64": {
+          "url": "https://github.com/cosmicstack-labs/mercury-agent/releases/download/whatsapp-v0.1.2/mercury-plugin-whatsapp-win32-x64.tgz",
+          "sha256": "9f1e816d86b18a0d2706448a94d3a515d4f7c76af6a5eb05013dd9e8c77d979f",
+          "size": 4483558
+        }
+      },
+      "tools": [
+        "call_owner",
+        "send_to_chat"
+      ],
+      "permissions": {
+        "network": [
+          "*.aliyuncs.com",
+          "*.openai.azure.com",
+          "*.whatsapp.com",
+          "*.whatsapp.net",
+          "api.cartesia.ai",
+          "api.deepgram.com",
+          "api.elevenlabs.io",
+          "api.minimax.io",
+          "api.openai.com",
+          "api.sarvam.ai",
+          "api.x.ai",
+          "generativelanguage.googleapis.com",
+          "streaming.assemblyai.com",
+          "web.whatsapp.com"
+        ],
+        "secrets": [
+          "GEMINI_API_KEY",
+          "ELEVENLABS_API_KEY",
+          "AZURE_OPENAI_API_KEY",
+          "DASHSCOPE_API_KEY",
+          "DEEPGRAM_API_KEY",
+          "ASSEMBLYAI_API_KEY",
+          "SARVAM_API_KEY",
+          "CARTESIA_API_KEY",
+          "MINIMAX_API_KEY"
+        ]
+      }
+    },
+    {
+      "id": "optimus",
+      "name": "Optimus",
+      "description": "Mercury uses your computer like a person: sees the screen, moves the mouse, types and opens apps, by chat or out loud with a talk key. macOS, Windows and Linux. Asks before anything that submits, sends, pays or deletes.",
+      "version": "0.5.1",
+      "kind": "out-of-process",
+      "tier": "official",
+      "homepage": "https://github.com/cosmicstack-labs/mercury-agent/tree/main/plugins/optimus",
+      "engines": {
+        "mercury": ">=1.3.9 <2.0.0",
+        "pluginApi": "^1.2.0"
+      },
+      "artifacts": {
+        "darwin-arm64": {
+          "url": "https://github.com/cosmicstack-labs/mercury-agent/releases/download/optimus-v0.5.1/mercury-plugin-optimus-darwin-arm64.tgz",
+          "sha256": "aaf61d6c8c6eb6fe0f53a38bc8c943681c21cdd10fca65cbadb3f9823a90ce9a",
+          "size": 1456552
+        },
+        "darwin-x64": {
+          "url": "https://github.com/cosmicstack-labs/mercury-agent/releases/download/optimus-v0.5.1/mercury-plugin-optimus-darwin-x64.tgz",
+          "sha256": "0a7337c010bd1b70fd0f455f98bfb23ef4b499d637ce7eb2a656eb322bf102a0",
+          "size": 1604878
+        },
+        "linux-x64": {
+          "url": "https://github.com/cosmicstack-labs/mercury-agent/releases/download/optimus-v0.5.1/mercury-plugin-optimus-linux-x64.tgz",
+          "sha256": "9879c8e81b71f8d1098140badee76005ea36cd173c3df104431c4dceeabd336c",
+          "size": 3267283
+        },
+        "linux-arm64": {
+          "url": "https://github.com/cosmicstack-labs/mercury-agent/releases/download/optimus-v0.5.1/mercury-plugin-optimus-linux-arm64.tgz",
+          "sha256": "45aa154641b22b242daccfb6dee421b91159023d7e0ccf8aeb944d647cdbb1d9",
+          "size": 3106455
+        },
+        "win32-x64": {
+          "url": "https://github.com/cosmicstack-labs/mercury-agent/releases/download/optimus-v0.5.1/mercury-plugin-optimus-win32-x64.tgz",
+          "sha256": "1a2b8b0ba96aa772789ee53370506b0c03df38bcf4100e391ccdaa3d77ba5a66",
+          "size": 1487649
+        }
+      },
+      "tools": [
+        "look",
+        "act",
+        "act_consequential",
+        "open",
+        "windows",
+        "permissions",
+        "listen"
+      ],
+      "permissions": {
+        "network": [
+          "*.aliyuncs.com",
+          "*.openai.azure.com",
+          "api.cartesia.ai",
+          "api.deepgram.com",
+          "api.elevenlabs.io",
+          "api.minimax.io",
+          "api.openai.com",
+          "api.sarvam.ai",
+          "api.x.ai",
+          "generativelanguage.googleapis.com",
+          "streaming.assemblyai.com"
+        ],
+        "secrets": [
+          "GEMINI_API_KEY",
+          "ELEVENLABS_API_KEY",
+          "AZURE_OPENAI_API_KEY",
+          "DASHSCOPE_API_KEY",
+          "DEEPGRAM_API_KEY",
+          "ASSEMBLYAI_API_KEY",
+          "SARVAM_API_KEY",
+          "CARTESIA_API_KEY",
+          "MINIMAX_API_KEY"
+        ]
+      }
+    }
+  ]
+}

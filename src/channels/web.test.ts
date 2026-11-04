@@ -133,11 +133,48 @@ describe('WebChannel durable streaming', () => {
     await expect(decision).resolves.toBe('');
   });
 
+  it('tells only the screen listening on the old session to follow a re-bind', () => {
+    const channel = new WebChannel('Mercury');
+    const seen: Record<string, string[]> = { old: [], other: [] };
+    for (const [key, sessionId] of [['old', 'sess-old'], ['other', 'sess-other']] as const) {
+      channel.addSSEClient({
+        enqueue(value: Uint8Array) { seen[key].push(new TextDecoder().decode(value)); },
+        close() {},
+      } as unknown as ReadableStreamDefaultController, sessionId);
+    }
+    channel.sendSessionSwitched('sess-old', { id: 'sess-new', shortId: 'sess-new', alias: 'obsidian-cedar', title: 'New session' });
+    expect(seen.old.join('')).toContain('event: session_switched');
+    expect(seen.old.join('')).toContain('"alias":"obsidian-cedar"');
+    expect(seen.other).toEqual([]);
+  });
+
   it('scopes allow-all mode to its Cloud session', async () => {
     const channel = new WebChannel('Mercury');
     channel.setSessionPermissionMode('session-allowed', 'allow-all');
     channel.emitCloudMessage('work', 'request-allowed', 'session-allowed', 'conversation-1', undefined, () => true);
 
     await expect(channel.askPermission('Write file?', 'request-allowed')).resolves.toBe('yes');
+  });
+});
+
+describe('WebChannel plan checklist', () => {
+  it('sends the plan only to that conversation and keeps it for reopening', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { PlanStore } = await import('../core/plan.js');
+    const channel = new WebChannel('Mercury');
+    channel.plans = new PlanStore(join(mkdtempSync(join(tmpdir(), 'mercury-webplan-')), 'plans.json'));
+    const seen: Record<string, string[]> = { a: [], b: [] };
+    for (const id of ['a', 'b']) {
+      channel.addSSEClient({ enqueue: (v: Uint8Array) => seen[id].push(new TextDecoder().decode(v)), close() {} } as unknown as ReadableStreamDefaultController, id);
+    }
+    channel.sendPlan([{ label: 'Research', status: 'active' }, { label: 'Write', status: 'pending' }], 'a');
+    expect(seen.a.join('')).toContain('event: plan');
+    expect(seen.a.join('')).toContain('"label":"Research"');
+    expect(seen.b.join('')).not.toContain('event: plan');
+    expect(channel.plans.get('a')?.steps).toHaveLength(2);
+    channel.sendPlan([{ label: 'x', status: 'nonsense' }], 'a');
+    expect(channel.plans.get('a')?.steps[0].label).toBe('Research');
   });
 });

@@ -1,9 +1,11 @@
+import { commandTouchesMercuryCredentials, isMercuryCredentialPath } from '../security/protected-paths.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync, lstatSync } from 'node:fs';
 import { join, resolve, sep, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { getMercuryHome } from '../utils/config.js';
 import { logger } from '../utils/logger.js';
+import { redactSecrets } from '../utils/redact.js';
 import { BLOCKED_COMMANDS } from './shell/blocklist.js';
 import {
   evaluateArgvPolicy,
@@ -19,7 +21,51 @@ import {
   type ContextScope,
 } from './permission-context.js';
 
+import type { McpGateRequest, McpGateResult } from './mcp/types.js';
+
 export type { PermissionContext } from './permission-context.js';
+
+/**
+ * Arguments as the owner sees them in an approval prompt. Up to 4,000
+ * characters are shown whole. Longer ones keep the start AND the end, with
+ * the size of the hidden middle, so a payload can't hide after a cut.
+ */
+const MCP_ARGS_SHOW_ALL = 4000;
+const MCP_ARGS_HEAD = 2400;
+const MCP_ARGS_TAIL = 1200;
+
+export function formatMcpArgs(args: unknown): string {
+  let text: string;
+  try {
+    text = JSON.stringify(args ?? {}, null, 2) ?? '{}';
+  } catch {
+    text = String(args);
+  }
+  text = redactSecrets(text);
+  if (text.length <= MCP_ARGS_SHOW_ALL) return text;
+  const hidden = text.length - MCP_ARGS_HEAD - MCP_ARGS_TAIL;
+  return `${text.slice(0, MCP_ARGS_HEAD)}\n… [${hidden.toLocaleString('en-US')} characters not shown; the start and end are] …\n${text.slice(-MCP_ARGS_TAIL)}`;
+}
+
+/**
+ * A shell segment that changes MCP setup: `mercury mcp add|remove|enable|
+ * disable|allow|disallow`, or anything that names mercury.yaml (sed -i,
+ * tee, cp, mv, echo >>). Reading it is caught too; that only costs a prompt.
+ */
+export function changesMcpSetup(segment: string): boolean {
+  return /\bmcp\s+(add|remove|rm|enable|disable|allow|disallow)\b/.test(segment)
+    || /mercury\.ya?ml/i.test(segment);
+}
+
+function protectedConfigPaths(): string[] {
+  const home = getMercuryHome();
+  return [
+    join(home, 'mercury.yaml'),
+    join(home, 'permissions.yaml'),
+    join(home, '.env'),
+    join(homedir(), '.mercury', '.env'),
+  ];
+}
 
 /** Result of a shell permission check. */
 export interface ShellCheckResult {
@@ -200,7 +246,10 @@ const DEFAULT_MANIFEST: PermissionsManifest = {
   },
 };
 
-const PERMISSIONS_FILE = join(getMercuryHome(), 'permissions.yaml');
+/** Where the owner's permissions live. Looked up each time: MERCURY_HOME can change after this module loads (tests, a profile switch), and the folder is created from the current one. */
+function permissionsFile(): string {
+  return join(getMercuryHome(), 'permissions.yaml');
+}
 
 // Split a command into shell-segment strings so each pipeline/chain/substitution
 // is checked separately. Without this, a single auto-approved base command
@@ -341,6 +390,7 @@ export class PermissionManager {
   private manifest: PermissionsManifest;
   private readonly cwd: string;
   private askHandler?: (prompt: string) => Promise<string>;
+  private turnAnswers: Array<{ action: string; answer: 'yes' | 'no' | 'always' }> = [];
   /**
    * The main agent's (root) context: replaced, never mutated, by the
    * legacy setters below. Sub-agents never read it while they run — they
@@ -352,7 +402,22 @@ export class PermissionManager {
   private rootCache: PermissionContext | null = null;
   private binaryResolver: BinaryResolver = pinnedBinary;
   private approvedCommandsByContext = new Map<string, Set<string>>();
+  /** "Always" on a shell prompt: command families (`pandoc`, `git commit`) allowed for the rest of that chat. */
+  private approvedFamiliesByContext = new Map<string, Set<string>>();
+  /**
+   * Which contexts may widen "Always" to a command family. Default: only the
+   * local terminal. The runtime also allows the owner's attached terminal and
+   * dashboard (web, but not remote Mercury Cloud requests, which stay exact).
+   */
+  private familyApprovalAllowed: (ctx: { channelType: string; channelId: string }) => boolean = (ctx) => ctx.channelType === 'cli';
+
+  setFamilyApprovalPolicy(fn: (ctx: { channelType: string; channelId: string }) => boolean): void {
+    this.familyApprovalAllowed = fn;
+  }
+  /** "Always allow" choices for plugin tools, per channel (see approvePluginTool). */
+  private approvedPluginToolsByContext = new Map<string, Set<string>>();
   private approvedWritesByContext = new Map<string, Set<string>>();
+  private approvedMcpByContext = new Map<string, Set<string>>();
   /** Hard-linked files the user answered "always" for, per interaction context. */
   private approvedHardlinkReadsByContext = new Map<string, Set<string>>();
   /**
@@ -503,7 +568,24 @@ export class PermissionManager {
   }
 
   onAsk(handler: (prompt: string) => Promise<string>): void {
-    this.askHandler = handler;
+    // Every answer the owner gives is evidence for the Owner Model (autonomy,
+    // risk per action type); the learning loop drains it once per turn.
+    this.askHandler = async (prompt: string) => {
+      const answer = await handler(prompt);
+      if (answer === 'yes' || answer === 'no' || answer === 'always') {
+        const action = prompt.split('\n')[0].replace(/:.*$/, '').trim().slice(0, 40) || 'action';
+        this.turnAnswers.push({ action, answer });
+        if (this.turnAnswers.length > 20) this.turnAnswers.shift();
+      }
+      return answer;
+    };
+  }
+
+  /** Permission answers given since the last drain (the learning loop reads them each turn). */
+  drainAnswers(): Array<{ action: string; answer: 'yes' | 'no' | 'always' }> {
+    const out = this.turnAnswers;
+    this.turnAnswers = [];
+    return out;
   }
 
   async requestApproval(prompt: string): Promise<boolean> {
@@ -514,6 +596,42 @@ export class PermissionManager {
     if (!this.askHandler) return false;
     const result = await this.askHandler(prompt);
     return result === 'yes' || result === 'always';
+  }
+
+  /**
+   * Approval for a plugin tool call (src/plugins). Same rules as the shell
+   * approval lane:
+   * - fail-closed (bots): the tool already passed the bot's explicit
+   *   permissions.yaml allow list (filterBotTools), so it runs; there is no
+   *   one to ask and no prompt mid-run.
+   * - internal/scheduled turns: only an allow-all context approves.
+   * - session Allow All approves, except web requests (never inherit local).
+   * - "always" is remembered per channel for this plugin tool.
+   * - otherwise the user sees the plugin, tool and arguments.
+   */
+  /** Plugin tools pre-approved for the current turn only (a scheduled task's allowTools). */
+  private turnPluginGrants = new Set<string>();
+
+  setTurnPluginGrants(tools: string[]): void {
+    this.turnPluginGrants = new Set(tools);
+  }
+
+  async approvePluginTool(toolKey: string, prompt: string): Promise<boolean> {
+    const ctx = this.ctx();
+    if (this.failClosed) return true;
+    if (this.turnPluginGrants.has(toolKey)) return true;
+    if (ctx.channelType === 'internal') return ctx.autoApprove;
+    if (this.isGlobalAutoApproveActive()) return true;
+    if (this.approvedPluginToolsByContext.get(ctx.channelId)?.has(toolKey)) return true;
+    if (!this.askHandler) return false;
+    const result = await this.askHandler(prompt);
+    if (result === 'always') {
+      const approved = this.approvedPluginToolsByContext.get(ctx.channelId) ?? new Set<string>();
+      approved.add(toolKey);
+      this.approvedPluginToolsByContext.set(ctx.channelId, approved);
+      return true;
+    }
+    return result === 'yes';
   }
 
   /** Session-level Allow All (user choice). Inside a sub-agent it only changes that sub-agent. */
@@ -567,9 +685,9 @@ export class PermissionManager {
   }
 
   private load(): PermissionsManifest {
-    if (existsSync(PERMISSIONS_FILE)) {
+    if (existsSync(permissionsFile())) {
       try {
-        const raw = readFileSync(PERMISSIONS_FILE, 'utf-8');
+        const raw = readFileSync(permissionsFile(), 'utf-8');
         const parsed = parseYaml(raw) as PermissionsManifest;
         return this.mergeDefaults(parsed);
       } catch (err) {
@@ -585,7 +703,7 @@ export class PermissionManager {
     const m = manifest || this.manifest;
     const dir = getMercuryHome();
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(PERMISSIONS_FILE, stringifyYaml(m, { lineWidth: 0 }), 'utf-8');
+    writeFileSync(permissionsFile(), stringifyYaml(m, { lineWidth: 0 }), 'utf-8');
     this.manifest = m;
   }
 
@@ -615,6 +733,10 @@ export class PermissionManager {
    * calls, because the file system can change between them.
    */
   async checkFsAccess(path: string, mode: 'read' | 'write'): Promise<FsAccessResult> {
+    // Mercury's login credentials are off limits to its own tools, whatever the scopes or mode.
+    if (isMercuryCredentialPath(path)) {
+      return { allowed: false, reason: "Permission denied: that is one of Mercury's login credential files (device tokens, password, sessions). Manage devices with /server.", code: 'denied' };
+    }
     if (mode === 'write') return this.checkScopedAccess(path, mode);
 
     const resolved = resolve(path);
@@ -719,6 +841,9 @@ export class PermissionManager {
   }
 
   private async checkScopedAccess(path: string, mode: 'read' | 'write'): Promise<FsAccessResult> {
+    if (mode === 'write' && this.isProtectedConfigPath(path)) {
+      return this.confirmConfigWrite(path);
+    }
     if (mode === 'read' && this.isElevated('fs_read')) {
       return { allowed: true };
     }
@@ -763,13 +888,24 @@ export class PermissionManager {
       if (tempScope && tempScope.write) return { allowed: true };
     }
 
-    // Fail-closed mode (bots): the explicitly granted scope IS the approval.
-    // No prompting in either direction — in-scope writes run, out-of-scope
-    // writes deny, and nothing ever waits for a user who isn't there.
+    // Fail-closed mode (bots): the explicitly granted scope IS the approval —
+    // in-scope access runs without prompting. Outside it, a bot whose runtime
+    // set an ask handler (Bots 2.0) asks the owner, who may not be there: the
+    // handler answers "no" when nobody replies in time, and the access denies.
+    // Nothing here ever writes the global permissions file.
     if (this.failClosed) {
       if (scope && scope.write) return { allowed: true };
       if (tempScope && tempScope.write) return { allowed: true };
-      return { allowed: false, reason: `Fail-closed: no granted write scope covers ${path}` };
+      if (this.askHandler && channelType === 'bot' && !this.isProtectedConfigPath(path)) {
+        const answer = await this.askHandler(`${mode === 'write' ? 'Write to file' : 'Read file'}: ${resolved}`);
+        if (answer === 'yes' || answer === 'always') {
+          // Covers the rest of this run; "always" is made durable by the bot runtime.
+          this.addTempScope(resolved, true, mode === 'write');
+          return { allowed: true };
+        }
+        return { allowed: false, reason: `The owner didn't allow ${mode === 'write' ? 'writing' : 'reading'} ${path}` };
+      }
+      return { allowed: false, reason: `Fail-closed: no granted ${mode} scope covers ${path}` };
     }
 
     // Write access in ask-me mode: ALWAYS prompt the user, even if scope exists
@@ -827,6 +963,9 @@ export class PermissionManager {
     }
 
     const trimmed = command.trim();
+    if (commandTouchesMercuryCredentials(trimmed)) {
+      return { allowed: false, reason: "Blocked: the command names one of Mercury's login credential files (device tokens, password, sessions). Manage devices with /server.", needsApproval: false };
+    }
     const segments = splitShellSegments(trimmed);
     const ctx = this.ctx();
     const cwd = options.cwd ?? this.cwd;
@@ -840,6 +979,21 @@ export class PermissionManager {
           return { allowed: false, reason: `Blocked command: matches "${pattern}"`, needsApproval: false };
         }
       }
+    }
+
+    // Adding or changing an MCP server is an owner action (ADR-029): a shell
+    // command that does it asks every time, Allow All and earlier "always"
+    // answers included, and never runs unattended. Otherwise an injected
+    // prompt could add a server whose autoApprove tools then run in
+    // scheduled turns.
+    if (segments.some(changesMcpSetup)) {
+      if (!this.askHandler || ctx.channelType === 'internal' || this.failClosed) {
+        return { allowed: false, reason: 'Changing MCP servers or mercury.yaml from a shell command needs the owner; run it yourself in a terminal', needsApproval: false };
+      }
+      const answer = await this.askHandler(`Run command (changes Mercury's MCP servers or config, so it always asks): ${trimmed}`);
+      return answer === 'yes' || answer === 'always'
+        ? { allowed: true, needsApproval: false, lane: 'shell' }
+        : { allowed: false, reason: `User denied: ${trimmed}`, needsApproval: false };
     }
 
     if (this.isGlobalAutoApproveActive()) {
@@ -893,6 +1047,22 @@ export class PermissionManager {
       }
     }
 
+    // "Always" on an earlier prompt in this chat covers the same command
+    // family (every segment), after the hard blocks and the cwd gate above.
+    const families = this.familyApprovalAllowed(ctx) ? this.approvedFamiliesByContext.get(ctx.channelId) : undefined;
+    if (families && families.size > 0) {
+      const needsApprovalList = shell.needsApproval ?? [];
+      const covered = segments.every((segment) => {
+        const family = commandFamily(segment);
+        return family !== null && families.has(family)
+          && !needsApprovalList.some((pattern) => this.matchPattern(segment, pattern));
+      });
+      if (covered) {
+        logger.info({ cmd: trimmed }, 'Shell command auto-approved (command family approved with Always in this chat)');
+        return { allowed: true, needsApproval: false, lane: 'shell' };
+      }
+    }
+
     // Argv lane: the only path to a prompt-free approval in Ask Me mode.
     const argvLane = this.classifyArgvLane(trimmed, cwd);
     if (argvLane.ok) {
@@ -923,12 +1093,74 @@ export class PermissionManager {
         const approved = this.approvedCommandsByContext.get(ctx.channelId) ?? new Set<string>();
         approved.add(trimmed);
         this.approvedCommandsByContext.set(ctx.channelId, approved);
+        // Also remember the command family (`pandoc`, `git commit`) so the
+        // next pandoc call in this chat doesn't ask again. Wrappers that can
+        // run anything (sudo, sh -c, env, xargs…) are never generalised.
+        const familyList = segments.map(commandFamily);
+        if (this.familyApprovalAllowed(ctx) && familyList.every((f): f is string => f !== null)) {
+          const set = this.approvedFamiliesByContext.get(ctx.channelId) ?? new Set<string>();
+          for (const f of familyList) set.add(f);
+          this.approvedFamiliesByContext.set(ctx.channelId, set);
+        }
         return { allowed: true, needsApproval: false, lane: 'shell' };
       }
       return { allowed: false, reason: `User denied: ${trimmed}`, needsApproval: false };
     }
 
     return { allowed: false, reason: 'Command not in auto-approve list — requires approval', needsApproval: true };
+  }
+
+  async checkMcpTool(request: McpGateRequest): Promise<McpGateResult> {
+    const { serverId, toolName } = request;
+    const label = `${serverId}/${toolName}`;
+    if (request.autoApprove) return { allowed: true };
+    if (this.failClosed) {
+      return { allowed: false, reason: `Fail-closed: MCP tool ${label} is not in tools.autoApprove` };
+    }
+    const ctx = this.ctx();
+    if (this.approvedMcpByContext.get(ctx.channelId)?.has(label)) return { allowed: true };
+    if (!this.askHandler || ctx.channelType === 'internal') {
+      return {
+        allowed: false,
+        reason: `MCP tool ${label} needs approval; add "${toolName}" to tools.autoApprove for server "${serverId}" to run it unattended`,
+      };
+    }
+    const answer = await this.askHandler(
+      `MCP tool call\nServer: ${serverId}\nTool:   ${toolName}\nArguments:\n${formatMcpArgs(request.args)}`,
+    );
+    if (answer === 'yes') return { allowed: true };
+    if (answer === 'always') {
+      const approved = this.approvedMcpByContext.get(ctx.channelId) ?? new Set<string>();
+      approved.add(label);
+      this.approvedMcpByContext.set(ctx.channelId, approved);
+      return { allowed: true };
+    }
+    return { allowed: false, reason: `User denied MCP tool ${label}` };
+  }
+
+  private isProtectedConfigPath(path: string): boolean {
+    const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin';
+    const normalize = (p: string) => (caseInsensitive ? p.toLowerCase() : p);
+    const protectedPaths = new Set(
+      protectedConfigPaths().flatMap((p) => [resolve(p), this.canonicalizePath(resolve(p))]).map(normalize),
+    );
+    const resolved = resolve(path);
+    return [resolved, this.canonicalizePath(resolved)].some((candidate) => protectedPaths.has(normalize(candidate)));
+  }
+
+  private async confirmConfigWrite(path: string): Promise<FsAccessResult> {
+    const resolved = resolve(path);
+    if (this.failClosed || !this.askHandler || this.ctx().channelType === 'internal') {
+      return {
+        allowed: false,
+        reason: `Permission denied: ${resolved} is a Mercury config file and can only be changed with the owner's confirmation`,
+      };
+    }
+    const answer = await this.askHandler(
+      `Write to Mercury config file: ${resolved}\n(it controls MCP servers, permissions and secrets)`,
+    );
+    if (answer === 'yes' || answer === 'always') return { allowed: true };
+    return { allowed: false, reason: `User denied write to ${path}` };
   }
 
   /**
@@ -1153,4 +1385,31 @@ export class PermissionManager {
       },
     };
   }
+}
+
+const NEVER_GENERALISE = new Set(['sudo', 'su', 'doas', 'eval', 'exec', 'sh', 'bash', 'zsh', 'fish', 'dash', 'env', 'xargs', 'nohup', 'time', 'watch', 'command', 'builtin', 'powershell', 'pwsh', 'cmd']);
+const EXACT_ONLY_SUBCOMMANDS = new Set(['install', 'i', 'add', 'exec', 'dlx', 'x', 'global', 'upgrade', 'update', 'run-script']);
+const SUBCOMMAND_TOOLS = new Set(['git', 'npm', 'pnpm', 'yarn', 'bun', 'npx', 'pnpx', 'docker', 'cargo', 'go', 'kubectl', 'brew', 'pip', 'pip3', 'uv', 'gh', 'deno', 'poetry', 'apt', 'apt-get', 'systemctl', 'launchctl']);
+
+/**
+ * The family an "Always" answer covers: the program (`pandoc`), or the
+ * program and its subcommand for multi-command tools (`git commit`, `npm
+ * install`). Null for wrappers that can run anything, and for segments with
+ * no plain program name.
+ */
+export function commandFamily(segment: string): string | null {
+  const tokens = segment.trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+  const first = tokens[i];
+  if (!first || /[^A-Za-z0-9._/+-]/.test(first)) return null;
+  const base = first.split('/').pop() ?? '';
+  if (!base || NEVER_GENERALISE.has(base)) return null;
+  if (SUBCOMMAND_TOOLS.has(base)) {
+    const sub = tokens[i + 1];
+    // Installing or executing arbitrary packages stays exact-match only.
+    if (sub && EXACT_ONLY_SUBCOMMANDS.has(sub)) return null;
+    return sub && /^[A-Za-z][A-Za-z0-9:_-]*$/.test(sub) ? `${base} ${sub}` : base;
+  }
+  return base;
 }

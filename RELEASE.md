@@ -1,47 +1,21 @@
-# Release v1.3.0
+# Release v1.5.1
 
-## ☿ Mercury Agent v1.3.0 — Mercury Bots
+## ☿ Mercury Agent v1.5.1
 
-Mercury stops being one agent and becomes **a fleet**. This release introduces **Mercury Bots** — persistent, persona-scoped agents that run *outside your conversation*: each with its own persona, private sandbox workspace, skill library, permission scopes, token budget, and a durable job queue. Onboard a researcher, a writer, a watchtower — chain them into multi-level fleets where a lead bot recruits and manages its own crew. They work 24/7, stream their thinking into their own threads, and escalate only what truly needs you.
+Reading aloud and voice typing now use the voice you chose, Gemini included, and the Optimus update button tells you what it did.
 
-### What's New
+### Speech
+- **Your voice choice counts everywhere.** Reading a reply aloud, voice typing and voice notes from Telegram or WhatsApp use the voice service chosen in Settings → Voice when it has a key. A fresh install with only a Gemini key no longer asks for an OpenAI key.
+- **Gemini speaks and listens.** Gemini reads replies aloud (about 4 seconds for a sentence) and transcribes what you say, with the same key Optimus uses. A Gemini model that's busy or retired falls through to the next one.
+- **The "needs a speech service" notice** points to Voice settings and names every option (Gemini, OpenAI, Deepgram, ElevenLabs) instead of an "Add OpenAI key" button.
 
-- **Persistent bot runtime** — Bots are long-lived persona agents, not temp sub-agents: `bot.yaml` manifest + `permissions.yaml`, private sandbox at `~/.mercury/bots/<id>/`, journal-backed thread history that hydrates on reopen. A wake turns them on; they work through a durable job queue that survives restarts.
-- **Fleets — leads + crews** — Promote any bot to **fleet lead**; it recruits, organizes, and manages its own crew (imperative self-organization). Multi-level hierarchies supported; crew results bubble up through the lead. Onboarding tiers: solo → lead auto-build → lead manual.
-- **Durable queue + DLQ** — Jobs survive restarts, lease-heartbeat while running, classify to `timed out` on worker death, and replay non-destructively from the DLQ (`/bots replay`). Nothing dies silently.
-- **Web cockpit** — The local dashboard gained a **Mercury Bots section**: live roster states, per-bot threads, needs-you escalation badges, and a fleet step view that mirrors the TUI.
-- **Sandbox + deliverables** — Per-bot isolated workspace; final artifacts go out via `bot_deliver`; retention janitor caps disk; fleet-shared folder for cross-bot files with implicit grants.
-- **Bundles** — `/bots export` produces a shareable bundle (manifests + personas + permissions + skills; a lead's bundle carries its whole crew). `/bots import` recreates bots — imported bots start **disabled** by design; sandbox, journals, and `.env` never travel.
-- **Permission tiers at onboarding** — `ask` / `allow` per capability, set explicitly. Per-bot shell allow-lists flow from `permissions.yaml autoApproveCommands`; malformed scopes skip + warn, never crash turns.
-- **Bot-facing tools** — `dispatch_bot`, `bot_schedule`, `bot_deliver`, `fleet_status`, `journal_append` + native/per-bot skill libraries with auto-synthesis. Bots can schedule their own future runs.
-- **`mercury bots` CLI** — `doctor` (exit 1 when actionable), `list`, `storage`.
+### Mercury Desktop
+- **"Update Optimus" says what happened** on the microphone & permissions card: updated, no newer version yet, or why it failed. It used to spin for a second and show nothing.
 
-### Fixed
+### Plugins
+- **Optimus 0.5.1 is in the catalog** (a plugin-only update, works with Mercury 1.3.9 and newer): the microphone picker, live voice-level test, off switch and permission checks on Mercury Desktop's Optimus page. Update it under Plugins → Optimus.
 
-- Fleet duplication on reopen; `/bots` stays inside the bot thread it opened.
-- Bot thinking streams live into its thread; fleet speed fixes (single-provider lease wait, batched roster fetches).
-- Bot-thread results no longer sliced at 800 chars; durable retries + durable mailboxes close delivery-contract gaps.
-- Windows hardening: SQLite queue teardown EBUSY, heartbeat-test EBUSY, retention EINVAL, separator-agnostic traversal guard; post-close queue ops degrade to no-ops.
-- JSON backend lease-expiry race closed; doctor flags routines registered in schedules but missing from `bot.yaml` (the silently-never-fires failure).
-- Telegram member installs no longer surface `install_skill`.
-
-### Upgrade
-
-**npm:**
-```
-npm install -g @cosmicstack/mercury-agent@1.3.0
-mercury restart
-```
-
-**Standalone binary:** re-run the one-line installer from mercuryagent.sh, then `mercury restart`.
-
-No config migrations. Bots are opt-in: `/bots create <id> "Name" "Description"` onboards your first bot.
-
-### Files Touched (highlights)
-
-- `src/bots/*` — the entire fleet module (new): store, queue (SQLite+JSON), bot-manager, bot-turn, journal, bundle, doctor, persona-template, fleet-*, skill-synthesis, retention, tools/.
-- `src/core/agent.ts`, `src/cli/*`, `src/channels/cli.ts` — /bots chat surface, CLI command group, bot-thread region, thinking streams.
-- `src/web/*` — Mercury Bots cockpit section on the dashboard.
-- PRs: #131–#139, #117 (RevShare).
-
-**Full Changelog**: https://github.com/cosmicstack-labs/mercury-agent/compare/v1.2.7...v1.3.0
+### Install
+- **Desktop:** [mercuryagent.sh/download](https://mercuryagent.sh/download) · Mac: `curl -fsSL https://mercuryagent.sh/install-desktop.sh | sh`
+- **Server / CLI:** `curl -fsSL https://mercuryagent.sh/install.sh | sh` · Windows: `irm https://mercuryagent.sh/install.ps1 | iex` · npm: `npm i -g @cosmicstack/mercury-agent`
+- **Already installed:** the Update button in Mercury Desktop, or `mercury upgrade`

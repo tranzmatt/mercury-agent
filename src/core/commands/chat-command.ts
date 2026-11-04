@@ -36,7 +36,7 @@ import {
 } from '../../utils/config.js';
 import { MAX_STEPS } from '../agent.js';
 import path from 'node:path';
-import type { ChannelMessage, ChannelType } from '../../types/channel.js';
+import type { ChannelType } from '../../types/channel.js';
 import { createProvider, ProviderRegistry as ProviderRegistryImpl } from '../../providers/registry.js';
 import { ProgrammingMode } from '../programming-mode.js';
 import { logger } from '../../utils/logger.js';
@@ -44,11 +44,81 @@ import { CLIChannel } from '../../channels/cli.js';
 import { formatToolStep, formatNarrative, type NarrativeStep } from '../../utils/tool-label.js';
 import { getTelegramHelp, getDiscordHelp, getSlackHelp } from '../../utils/manual.js';
 import { WebChannel } from '../../channels/web.js';
+import { describePermissionMode, loadPermissionMode, savePermissionMode } from '../../capabilities/permission-mode-store.js';
 import type { ArrowSelectOption } from '../../utils/arrow-select.js';
 import { PLAYER_CONTROLS, handlePlayerAction, formatNowPlaying } from '../../spotify/ui.js';
 import { getCloudTokenStore } from '../../cloud/token-store.js';
-import { updateCliProviderStatus } from '../provider-status.js';
+import { publishStatus, updateCliProviderStatus } from '../provider-status.js';
 import { whatsNewText } from '../../utils/whats-new.js';
+import { formatMcpChatStatus } from '../../capabilities/mcp/admin.js';
+import { FORGET_THAT_RE, MEMORY_SUBCOMMAND_HELP, handleBeliefCommand } from './memory-commands.js';
+
+/**
+ * The owner's own screens: the foreground terminal (CLI channel) and the
+ * attached terminal or dashboard (web channel). Both can show an arrow-key
+ * picker; every other channel gets text. Since 1.3.1 the default launch
+ * attaches, so a picker offered only to the CLI channel was a picker nobody
+ * saw — /model made people type `/models use <name>`.
+ */
+function isOwnerScreen(channel: unknown, channelType: string): channel is CLIChannel | WebChannel {
+  return channel instanceof WebChannel || (channelType === 'cli' && channel instanceof CLIChannel);
+}
+
+/**
+ * An arrow-key choice on an owner screen. Returns the chosen label, or null
+ * when the owner dismissed it (Esc) or the screen could not show it, so a
+ * dismissed picker never silently acts on the first option.
+ */
+async function pickOnOwnerScreen(agent: Agent, channel: CLIChannel | WebChannel, channelType: string, channelId: string, question: string, labels: string[]): Promise<string | null> {
+  if (channel instanceof WebChannel) {
+    const value = await channel.presentChoicePrompt(question, labels.map((label, i) => ({ value: String(i), label })), channelId);
+    const idx = Number.parseInt(value, 10);
+    return Number.isInteger(idx) && labels[idx] !== undefined ? labels[idx] : null;
+  }
+  const picked = await agent.presentChoice(question, labels, channelId, channelType);
+  return labels.includes(picked) ? picked : null;
+}
+
+/**
+ * The Ask Me / Allow All picker on an owner screen (/permissions, and a
+ * fresh /new session). The current mode is named in the question; Esc keeps
+ * it. A pick is applied, saved and pushed to every status row.
+ */
+async function offerPermissionMode(agent: Agent, channel: CLIChannel | WebChannel, channelId: string, question: string): Promise<void> {
+  if (channel instanceof CLIChannel) {
+    const mode = await channel.askPermissionMode(loadPermissionMode() ?? undefined);
+    if (mode === 'allow-all') {
+      agent.capabilities.permissions.setAutoApproveAll(true);
+      agent.capabilities.permissions.addTempScope('/', true, true);
+    } else {
+      agent.capabilities.permissions.setAutoApproveAll(false);
+    }
+    const chosen = mode === 'allow-all' ? 'allow-all' : 'ask-me';
+    savePermissionMode(chosen);
+    channel.setPermissionModeStatus(chosen);
+    publishStatus();
+    await channel.send(`${describePermissionMode(chosen)} Saved: Mercury remembers this. Change it any time with /permissions.`, channelId);
+    return;
+  }
+  // The attached terminal and the dashboard (channel type 'web').
+  const current = loadPermissionMode() ?? (channel.getSettings().bypassPermissions ? 'allow-all' : 'ask-me');
+  const picked = await channel.presentChoicePrompt(
+    `${question} (now: ${current === 'allow-all' ? 'Allow All' : 'Ask Me'})`,
+    [
+      { value: 'ask-me', label: 'Ask Me: ask before writing files or running commands' },
+      { value: 'allow-all', label: 'Allow All: just do it (blocked commands stay blocked)' },
+    ],
+    channelId,
+  );
+  if (picked !== 'ask-me' && picked !== 'allow-all') {
+    await channel.send(`${describePermissionMode(current)} Unchanged. /permissions switches any time.`, channelId);
+    return;
+  }
+  channel.setBypassPermissions(picked === 'allow-all');
+  savePermissionMode(picked);
+  publishStatus();
+  await channel.send(`${describePermissionMode(picked)} Saved: Mercury remembers this. Change it any time with /permissions.`, channelId);
+}
 
 export async function handleChatCommand(agent: Agent, content: string, channelType: string, channelId: string): Promise<boolean> {
   const trimmed = content.trim();
@@ -68,6 +138,9 @@ export async function handleChatCommand(agent: Agent, content: string, channelTy
   // Unlike /reset this never halts agents, clears queues, or wipes state.
   if (cmd === '/new') {
     await agent.handleSessionCommand('/session new', channelType as ChannelType, channelId);
+    // A fresh session on the owner's own screen asks which permission mode
+    // to run in (the current one is shown; Esc keeps it).
+    if (isOwnerScreen(channel, channelType)) await offerPermissionMode(agent, channel, channelId, 'Permission mode for this session?');
     return true;
   }
 
@@ -90,7 +163,12 @@ export async function handleChatCommand(agent: Agent, content: string, channelTy
     const runningVersion = channelType === 'cli' && channel instanceof CLIChannel
       ? (channel.getTuiState().version || 'dev')
       : 'dev';
-    await channel.send(whatsNewText(runningVersion), channelId).catch((e) => logger.warn({ e }, 'channel send failed'));
+    // The signed update manifest's notes for this version, when it has them.
+    const { readManifestCache, latestFor } = await import('../../updates/manifest.js');
+    const cached = readManifestCache().manifest;
+    const release = [latestFor(cached, 'server', 'stable'), latestFor(cached, 'server', 'dev')].find((r) => r && r.version === runningVersion.replace(/^v/, '') && r.notes);
+    const text = release?.notes ? `${release.notes}${release.notesUrl ? `\n\n${release.notesUrl}` : ''}` : whatsNewText(runningVersion);
+    await channel.send(text, channelId).catch((e) => logger.warn({ e }, 'channel send failed'));
     return true;
   }
 
@@ -101,6 +179,12 @@ export async function handleChatCommand(agent: Agent, content: string, channelTy
       const runningVersion = channelType === 'cli' && channel instanceof CLIChannel
         ? (channel.getTuiState().version || 'dev')
         : 'dev';
+      const { readManifestCache, requiredFor } = await import('../../updates/manifest.js');
+      const required = requiredFor(readManifestCache().manifest, 'server', runningVersion);
+      if (required) {
+        await channel.send(`This update is required and can't be ignored: ${required.reason} Run \`mercury upgrade\` in your terminal; it goes back on its own if anything fails.`, channelId);
+        return true;
+      }
       const target = latestSeenUpdate(runningVersion);
       if (!target) {
         await channel.send('Nothing to ignore — no update was offered for this version.', channelId);
@@ -151,20 +235,27 @@ export async function handleChatCommand(agent: Agent, content: string, channelTy
     return true;
   }
 
+  // Direct form: /permissions allow-all | /permissions ask-me (owner's terminal or dashboard).
+  const directMode = /^\/permissions\s+(allow-all|ask-me)$/.exec(cmd)?.[1] as 'allow-all' | 'ask-me' | undefined;
+  if (directMode && (channel instanceof WebChannel || (channelType === 'cli' && channel instanceof CLIChannel))) {
+    if (channel instanceof WebChannel) channel.setBypassPermissions(directMode === 'allow-all');
+    else {
+      agent.capabilities.permissions.setAutoApproveAll(directMode === 'allow-all');
+      if (directMode === 'allow-all') agent.capabilities.permissions.addTempScope('/', true, true);
+      if (channel instanceof CLIChannel) channel.setPermissionModeStatus(directMode);
+    }
+    savePermissionMode(directMode);
+    publishStatus();
+    await channel.send(`${describePermissionMode(directMode)} Saved.`, channelId);
+    return true;
+  }
+
   if (cmd === '/permissions') {
-    if (channelType === 'cli' && channel instanceof CLIChannel) {
-      const mode = await channel.askPermissionMode?.();
-      if (mode === 'allow-all') {
-        agent.capabilities.permissions.setAutoApproveAll(true);
-        agent.capabilities.permissions.addTempScope('/', true, true);
-        await channel.send('Allow All mode active for this session. All scopes, commands, and loops auto-approved. Resets on restart.', channelId);
-      } else {
-        agent.capabilities.permissions.setAutoApproveAll(false);
-        await channel.send('Ask Me mode active. Risky actions will prompt for confirmation.', channelId);
-      }
+    if (isOwnerScreen(channel, channelType)) {
+      await offerPermissionMode(agent, channel, channelId, 'How should Mercury handle risky actions?');
       return true;
     }
-    await channel.send('Use /permissions in CLI to switch permission mode. On Telegram, use the /permissions button or command.', channelId);
+    await channel.send('On Telegram, use the /permissions button or command. Your own terminal and dashboard use /permissions too.', channelId);
     return true;
   }
 
@@ -213,18 +304,18 @@ export async function handleChatCommand(agent: Agent, content: string, channelTy
       ];
       await channel.send(lines.join('\n'), channelId);
 
-      if (channelType === 'cli' && channel instanceof CLIChannel && activeProviders.length > 1) {
+      if (activeProviders.length > 1 && isOwnerScreen(channel, channelType)) {
         const choices = [
           ...activeProviders.map((p) => `${p.name} · ${p.model}${p.name === current.name ? ' (current)' : ''}`),
           'Open doctor instructions',
           'Keep current model',
         ];
-        const picked = await agent.presentChoice('Switch session model?', choices, channelId, channelType);
+        const picked = await pickOnOwnerScreen(agent, channel, channelType, channelId, 'Switch session model?', choices);
+        if (picked === null || picked === 'Keep current model') return true;
         if (picked === 'Open doctor instructions') {
           await channel.send('Run `mercury doctor` and update provider/model settings. Then restart Mercury to persist defaults.', channelId);
           return true;
         }
-        if (picked === 'Keep current model') return true;
         const providerName = picked.split(' · ')[0].trim();
         if (providerName && providerName !== current.name) {
           const switched = await agent.switchSessionProvider(providerName);
@@ -326,7 +417,7 @@ export async function handleChatCommand(agent: Agent, content: string, channelTy
         ];
         await channel.send(lines.join('\n'), channelId);
 
-        if (channelType === 'cli' && channel instanceof CLIChannel) {
+        if (isOwnerScreen(channel, channelType)) {
           const availableModels = models.filter((m) => m.available);
           const choices = [
             ...availableModels.map((m) => `${m.id} · ${m.label}${m.id === currentModel ? ' (current)' : ''}`),
@@ -336,8 +427,8 @@ export async function handleChatCommand(agent: Agent, content: string, channelTy
             await channel.send('Only one model available for your tier. Upgrade to unlock more.', channelId);
             return true;
           }
-          const picked = await agent.presentChoice('Switch cloud model?', choices, channelId, channelType);
-          if (picked === 'Keep current model') return true;
+          const picked = await pickOnOwnerScreen(agent, channel, channelType, channelId, 'Switch cloud model?', choices);
+          if (picked === null || picked === 'Keep current model') return true;
           const modelId = picked.split(' · ')[0].trim();
           if (modelId) {
             cfg.providers.mercuryCloud.model = modelId;
@@ -387,6 +478,28 @@ export async function handleChatCommand(agent: Agent, content: string, channelTy
     }
 
     await channel.send('Usage: `/cloud models` to list, `/cloud use <model-id>` to switch', channelId);
+    return true;
+  }
+
+  // Owner Model (ADR-026): /memory learned|beliefs|contested|confirm|forget|correct|settle,
+  // /forget <text>, and a plain "forget that" right after a `☿ Noted:` line.
+  if (cmd.startsWith('/memory ') || cmd === '/forget' || cmd.startsWith('/forget ') || FORGET_THAT_RE.test(trimmed)) {
+    if (!agent.userMemory) {
+      if (FORGET_THAT_RE.test(trimmed)) return false; // nothing noted without a memory store; let the model answer
+      await channel.send('Second brain is not available, so there is nothing to recall or forget.', channelId);
+      return true;
+    }
+    const reply = handleBeliefCommand(
+      { beliefs: agent.userMemory.beliefs, listings: agent.lastBeliefListing, lastNoted: agent.lastNotedBeliefId },
+      channelId,
+      trimmed,
+    );
+    if (reply === null) {
+      if (FORGET_THAT_RE.test(trimmed)) return false; // no `☿ Noted:` to undo in this chat
+      await channel.send(MEMORY_SUBCOMMAND_HELP, channelId);
+      return true;
+    }
+    await channel.send(reply, channelId);
     return true;
   }
 
@@ -921,6 +1034,11 @@ export async function handleChatCommand(agent: Agent, content: string, channelTy
     return true;
   }
 
+  if (cmd === '/mcp' || cmd.startsWith('/mcp ')) {
+    await channel.send(formatMcpChatStatus(ctx.mcpStatus?.() ?? [], trimmed.slice('/mcp'.length).trim()), channelId);
+    return true;
+  }
+
   if (cmd === '/skills' || cmd.startsWith('/skills ')) {
     await agent.handleSkillsSlashCommand(trimmed, channel, channelId, ctx);
     return true;
@@ -1095,58 +1213,129 @@ export async function handleChatCommand(agent: Agent, content: string, channelTy
     return true;
   }
 
+  if (cmd === '/server' || cmd.startsWith('/server ')) {
+    // Remote access is managed on the computer Mercury runs on: the terminal
+    // here, or Mercury Desktop / an attached terminal on this computer —
+    // never from a phone chat or a remote device.
+    const here = channelType === 'cli' || agent.currentMessage?.metadata?.thisComputer === true;
+    if (!here) {
+      await channel.send('`/server` works only on the computer Mercury runs on (its terminal, or Mercury Desktop there).', channelId);
+      return true;
+    }
+    const { runServerCommand } = await import('../../security/server-menu.js');
+    const { localServerOps } = await import('../../security/server-ops.js');
+    const ops = localServerOps({ cloudConnected: () => !!ctx.config().cloud?.enabled, by: channelType === 'cli' ? 'cli' : 'desktop' });
+    const args = trimmed.slice('/server'.length);
+    const prompt = channel as typeof channel & { presentChoicePrompt?: (q: string, o: Array<{ value: string; label: string }>, t?: string) => Promise<string> };
+    const say = async (text: string) => { await channel.send(text, channelId); };
+    if (channel instanceof CLIChannel) {
+      await channel.withMenu(async (select) => {
+        await runServerCommand(args, ops, {
+          choose: async (title, options) => (await select(title, options)) || null,
+          say,
+          // Shown in the menu, not the transcript.
+          secret: async (text) => { await select(text, [{ value: 'ok', label: "I've copied it" }]); },
+        });
+      });
+      return true;
+    }
+    await runServerCommand(args, ops, {
+      choose: async (title, options) => (typeof prompt.presentChoicePrompt === 'function' ? (await prompt.presentChoicePrompt(title, options, channelId)) || null : null),
+      say,
+      secret: async (text) => {
+        if (typeof prompt.presentChoicePrompt === 'function') await prompt.presentChoicePrompt(text, [{ value: 'ok', label: "I've copied it" }], channelId);
+        else await say(text);
+      },
+    });
+    return true;
+  }
+
   if (cmd.startsWith('/research')) {
     const rawArgs = trimmed.slice('/research'.length).trim();
+    const sub = rawArgs.toLowerCase();
+    const web = channel instanceof WebChannel ? channel : null;
+    // Research a message as a real user turn in this chat: the same session
+    // as the command (without it the turn, and its report, went to another one).
+    const asked = agent.currentMessage?.channelId === channelId ? agent.currentMessage : null;
+    const research = (content: string, opts: { topic?: string; planFirst?: boolean } = {}): void => {
+      agent.researchMode.setOn(opts.topic ?? content.slice(0, 160), { sessionId: channelId, planFirst: opts.planFirst });
+      web?.sendResearchArmed(true, channelId, { topic: opts.topic ?? content.slice(0, 160), planFirst: opts.planFirst });
+      agent.enqueueMessage({
+        id: `research-${Date.now().toString(36)}`,
+        channelId,
+        channelType: channelType as ChannelType,
+        senderId: 'user',
+        senderName: 'You',
+        content,
+        timestamp: Date.now(),
+        ...(asked?.sessionId ? { sessionId: asked.sessionId } : {}),
+        ...(asked?.metadata ? { metadata: { ...asked.metadata } } : {}),
+      });
+    };
 
-    if (!rawArgs || rawArgs.toLowerCase() === 'status') {
+    if (!rawArgs || sub === 'status') {
       await channel.send(agent.researchMode.getStatusText(), channelId);
       return true;
     }
 
-    if (rawArgs.toLowerCase() === 'on') {
-      agent.researchMode.setOn();
-      await channel.send(
-        'Research mode: **On**\nI will perform deep, multi-source web research and produce a full markdown research article. Long tasks are expected. Use `/research off` to exit.',
-        channelId,
-      );
+    if (sub === 'on' || sub === 'plan') {
+      agent.researchMode.setOn(undefined, { sessionId: channelId, planFirst: sub === 'plan' });
+      web?.sendResearchArmed(true, channelId, { planFirst: sub === 'plan' });
+      await channel.send(`Research: **On** for your next message here${sub === 'plan' ? ' (plan first)' : ''}. I'll search live sources, cross-check them and write a full report; then research switches off again. \`/research off\` cancels.`, channelId);
       return true;
     }
 
-    if (rawArgs.toLowerCase() === 'off') {
+    if (sub === 'off') {
       agent.researchMode.setOff();
-      await channel.send('Research mode: **Off**\nBack to normal conversation mode.', channelId);
+      web?.sendResearchArmed(false, channelId);
+      await channel.send('Research: **Off**. Back to normal conversation.', channelId);
       return true;
     }
 
-    if (rawArgs.toLowerCase() === 'toggle') {
-      const newState = agent.researchMode.toggle();
-      await channel.send(`Research mode: **${newState === 'on' ? 'On' : 'Off'}**`, channelId);
+    if (sub === 'toggle') {
+      const on = !agent.researchMode.armedForSession(channelId);
+      if (on) agent.researchMode.setOn(undefined, { sessionId: channelId });
+      else agent.researchMode.setOff();
+      web?.sendResearchArmed(on, channelId);
+      await channel.send(`Research: **${on ? 'On' : 'Off'}**${on ? ' for your next message here' : ''}`, channelId);
       return true;
     }
 
-    // Treat remaining args as a topic + enable research mode
-    agent.researchMode.setOn(rawArgs);
-    if (channel instanceof WebChannel) {
-      channel.sendHeartbeat(`Research mode: On. Topic: ${rawArgs}. I will gather live sources and produce a full research article.`, channelId);
-    } else {
-      await channel.send(
-        `Research mode: **On**\nTopic: ${rawArgs}\nI will gather live sources and produce a full research article. Use \`/research off\` to exit.`,
-        channelId,
-      );
+    // Pick up where the last run in this chat left off.
+    if (sub === 'continue' || sub === 'retry') {
+      const last = agent.researchMode.runFor(channelId);
+      if (!last) {
+        await channel.send('There is no earlier research in this chat to continue. Use `/research <topic>` to start one.', channelId);
+        return true;
+      }
+      const snap = last.snapshot();
+      if (sub === 'retry') {
+        const failed = last.failedSources().slice(0, 12);
+        if (!failed.length) {
+          await channel.send('Every source in the last research was read; there is nothing to retry.', channelId);
+          return true;
+        }
+        research(`Retry the sources that couldn't be read in the research on "${snap.topic}", then update the report with anything new. Try each once more; if one fails again, find another source for the same point.\n${failed.map((f) => `- ${f.url} (${f.reason ?? 'failed'})`).join('\n')}`, { topic: snap.topic });
+        return true;
+      }
+      const gaps = [
+        ...(snap.cut ? [`it stopped early because ${snap.cut}`] : []),
+        ...last.failedSources().slice(0, 8).map((f) => `${f.domain} couldn't be read (${f.reason ?? 'failed'})`),
+      ];
+      research(`Continue the research on "${snap.topic}". Build on the report already in this conversation: keep what it established, fill in what it doesn't cover, and write the full updated report.${gaps.length ? `\nKnown gaps:\n${gaps.map((g) => `- ${g}`).join('\n')}` : ''}`, { topic: snap.topic });
+      return true;
     }
-    // Enqueue the topic as a real user message so the agent immediately
-    // begins researching it, rather than only setting mode + topic and
-    // waiting for the user to repeat themselves.
-    const researchTopicMsg: ChannelMessage = {
-      id: `research-${Date.now().toString(36)}`,
-      channelId,
-      channelType: channelType as ChannelType,
-      senderId: 'user',
-      senderName: 'You',
-      content: rawArgs,
-      timestamp: Date.now(),
-    };
-    agent.enqueueMessage(researchTopicMsg);
+
+    // "/research plan <topic>": show the plan before starting.
+    const planned = /^plan\s+(.+)$/is.exec(rawArgs);
+    if (planned) {
+      research(planned[1].trim(), { planFirst: true });
+      return true;
+    }
+
+    // Anything else is the topic: research it now.
+    if (!web) await channel.send(`Research: **On**\nTopic: ${rawArgs}\nI'll gather live sources and write a full report.`, channelId);
+    research(rawArgs);
     return true;
   }
 
