@@ -1,12 +1,12 @@
 {
-  "total": 22072,
-  "npm": 15497,
-  "binaries": 4449,
-  "desktop": 2126,
+  "total": 22113,
+  "npm": 15515,
+  "binaries": 4461,
+  "desktop": 2137,
   "desktopByPlatform": {
-    "macos": 644,
-    "windows": 1081,
+    "macos": 648,
+    "windows": 1088,
     "linux": 401
   },
-  "updatedAt": "2026-11-18T18:20:23.223Z"
+  "updatedAt": "2026-11-19T00:39:04.483Z"
 }
